@@ -1,0 +1,13 @@
+{
+  "videoPath": "D:\\third_year_of_university\\v1.mp4",
+  "frame": 0,
+  "sourceVideo": {
+    "fps": 24,
+    "frameCount": 241,
+    "width": 1280,
+    "height": 720,
+    "frameIndex": 0
+  },
+  "seatsCount": 23,
+  "savedAt": 1775025154388
+}
