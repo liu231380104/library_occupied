@@ -10,9 +10,26 @@ import AdminSeatConfig from "../admin/AdminSeatConfig";
 import api from "../../services/api";
 import { getCurrentUser, getUserRole } from "../../utils/tokenUtils";
 
+const THEME = {
+  asideBg: "#f1ede7",
+  border: "#d8d2c9",
+  primary: "#7f95a6",
+  primaryText: "#ffffff",
+  btnText: "#3e4748",
+  danger: "#b78a84",
+  noticeWarnBg: "#f3ece1",
+  noticeWarnBorder: "#c4ab87",
+  noticeDangerBg: "#f2e8e7",
+  noticeDangerBorder: "#b78a84",
+  text: "#3f4748",
+  muted: "#646d6e",
+};
+
 const Dashboard = () => {
   const [role, setRole] = useState(null);
   const [username, setUsername] = useState("");
+  const [creditScore, setCreditScore] = useState(null);
+  const [accountStatus, setAccountStatus] = useState("active");
   const [activeTab, setActiveTab] = useState("seatMap");
   const [keepAdminSeatConfigMounted, setKeepAdminSeatConfigMounted] = useState(false);
   const [floatingNotice, setFloatingNotice] = useState(null);
@@ -31,8 +48,32 @@ const Dashboard = () => {
     const currentUser = getCurrentUser();
     setRole(currentRole);
     setUsername(currentUser?.username || "");
+    setCreditScore(Number(sessionStorage.getItem("creditScore")) || null);
+    setAccountStatus(sessionStorage.getItem("accountStatus") || "active");
     setActiveTab(currentRole === "admin" ? "adminReports" : "seatMap");
   }, []);
+
+  useEffect(() => {
+    if (role === "admin" || !role) return;
+
+    const refreshCreditStatus = async () => {
+      try {
+        const response = await api.get("/reports/my-credit-stats");
+        const nextScore = Number(response.data?.profile?.credit_score);
+        const nextStatus = response.data?.profile?.status || "active";
+        if (Number.isFinite(nextScore)) {
+          setCreditScore(nextScore);
+          sessionStorage.setItem("creditScore", String(nextScore));
+        }
+        setAccountStatus(nextStatus);
+        sessionStorage.setItem("accountStatus", nextStatus);
+      } catch (error) {
+        // 保留登录时的缓存值，避免页面直接空白
+      }
+    };
+
+    refreshCreditStatus();
+  }, [role]);
 
   useEffect(() => {
     const openAdminReports = () => {
@@ -92,16 +133,16 @@ const Dashboard = () => {
   };
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh" }}>
+    <div style={{ display: "flex", minHeight: "100vh", color: THEME.text }}>
       <aside
         style={{
           width: "220px",
-          backgroundColor: "#f4f4f4",
-          borderRight: "1px solid #ddd",
+          backgroundColor: THEME.asideBg,
+          borderRight: `1px solid ${THEME.border}`,
           padding: "20px",
         }}
       >
-        <h3>导航</h3>
+        <h3 style={{ color: THEME.text }}>导航</h3>
         <ul style={{ listStyle: "none", padding: 0 }}>
           <li>
             <button
@@ -110,9 +151,9 @@ const Dashboard = () => {
                 width: "100%",
                 marginBottom: "8px",
                 padding: "8px",
-                backgroundColor: activeTab === "seatMap" ? "#007bff" : "#fff",
-                color: activeTab === "seatMap" ? "#fff" : "#000",
-                border: "1px solid #ccc",
+                backgroundColor: activeTab === "seatMap" ? THEME.primary : "#fff",
+                color: activeTab === "seatMap" ? THEME.primaryText : THEME.btnText,
+                border: `1px solid ${THEME.border}`,
                 borderRadius: "4px",
                 cursor: "pointer",
               }}
@@ -129,9 +170,9 @@ const Dashboard = () => {
                   marginBottom: "8px",
                   padding: "8px",
                   backgroundColor:
-                    activeTab === "reservations" ? "#007bff" : "#fff",
-                  color: activeTab === "reservations" ? "#fff" : "#000",
-                  border: "1px solid #ccc",
+                    activeTab === "reservations" ? THEME.primary : "#fff",
+                  color: activeTab === "reservations" ? THEME.primaryText : THEME.btnText,
+                  border: `1px solid ${THEME.border}`,
                   borderRadius: "4px",
                   cursor: "pointer",
                 }}
@@ -149,9 +190,9 @@ const Dashboard = () => {
                   marginBottom: "8px",
                   padding: "8px",
                   backgroundColor:
-                    activeTab === "notifications" ? "#007bff" : "#fff",
-                  color: activeTab === "notifications" ? "#fff" : "#000",
-                  border: "1px solid #ccc",
+                    activeTab === "notifications" ? THEME.primary : "#fff",
+                  color: activeTab === "notifications" ? THEME.primaryText : THEME.btnText,
+                  border: `1px solid ${THEME.border}`,
                   borderRadius: "4px",
                   cursor: "pointer",
                 }}
@@ -169,9 +210,9 @@ const Dashboard = () => {
                   marginBottom: "8px",
                   padding: "8px",
                   backgroundColor:
-                    activeTab === "myCredit" ? "#007bff" : "#fff",
-                  color: activeTab === "myCredit" ? "#fff" : "#000",
-                  border: "1px solid #ccc",
+                    activeTab === "myCredit" ? THEME.primary : "#fff",
+                  color: activeTab === "myCredit" ? THEME.primaryText : THEME.btnText,
+                  border: `1px solid ${THEME.border}`,
                   borderRadius: "4px",
                   cursor: "pointer",
                 }}
@@ -189,9 +230,9 @@ const Dashboard = () => {
                   marginBottom: "8px",
                   padding: "8px",
                   backgroundColor:
-                    activeTab === "myReports" ? "#007bff" : "#fff",
-                  color: activeTab === "myReports" ? "#fff" : "#000",
-                  border: "1px solid #ccc",
+                    activeTab === "myReports" ? THEME.primary : "#fff",
+                  color: activeTab === "myReports" ? THEME.primaryText : THEME.btnText,
+                  border: `1px solid ${THEME.border}`,
                   borderRadius: "4px",
                   cursor: "pointer",
                 }}
@@ -209,9 +250,9 @@ const Dashboard = () => {
                   marginBottom: "8px",
                   padding: "8px",
                   backgroundColor:
-                    activeTab === "adminReports" ? "#007bff" : "#fff",
-                  color: activeTab === "adminReports" ? "#fff" : "#000",
-                  border: "1px solid #ccc",
+                    activeTab === "adminReports" ? THEME.primary : "#fff",
+                  color: activeTab === "adminReports" ? THEME.primaryText : THEME.btnText,
+                  border: `1px solid ${THEME.border}`,
                   borderRadius: "4px",
                   cursor: "pointer",
                 }}
@@ -229,9 +270,9 @@ const Dashboard = () => {
                   marginBottom: "8px",
                   padding: "8px",
                   backgroundColor:
-                    activeTab === "adminCredit" ? "#007bff" : "#fff",
-                  color: activeTab === "adminCredit" ? "#fff" : "#000",
-                  border: "1px solid #ccc",
+                    activeTab === "adminCredit" ? THEME.primary : "#fff",
+                  color: activeTab === "adminCredit" ? THEME.primaryText : THEME.btnText,
+                  border: `1px solid ${THEME.border}`,
                   borderRadius: "4px",
                   cursor: "pointer",
                 }}
@@ -249,9 +290,9 @@ const Dashboard = () => {
                   marginBottom: "8px",
                   padding: "8px",
                   backgroundColor:
-                    activeTab === "adminSeatConfig" ? "#007bff" : "#fff",
-                  color: activeTab === "adminSeatConfig" ? "#fff" : "#000",
-                  border: "1px solid #ccc",
+                    activeTab === "adminSeatConfig" ? THEME.primary : "#fff",
+                  color: activeTab === "adminSeatConfig" ? THEME.primaryText : THEME.btnText,
+                  border: `1px solid ${THEME.border}`,
                   borderRadius: "4px",
                   cursor: "pointer",
                 }}
@@ -270,7 +311,7 @@ const Dashboard = () => {
             style={{
               width: "100%",
               padding: "8px",
-              backgroundColor: "#dc3545",
+              backgroundColor: THEME.danger,
               color: "#fff",
               border: "none",
               borderRadius: "4px",
@@ -287,6 +328,44 @@ const Dashboard = () => {
         <p>
           {role === "admin" ? "管理员" : "用户"}：{username || "未登录"}
         </p>
+        {role !== "admin" && (
+          <div
+            style={{
+              display: "inline-flex",
+              gap: "10px",
+              alignItems: "center",
+              padding: "8px 12px",
+              borderRadius: "999px",
+              border: `1px solid ${accountStatus === "frozen" ? "#b78a84" : "#8ca79a"}`,
+              backgroundColor: accountStatus === "frozen" ? "#f0e1df" : "#e1ebe5",
+              color: accountStatus === "frozen" ? "#7a4f4a" : "#476457",
+              marginBottom: "12px",
+              fontSize: "14px",
+              fontWeight: 600,
+            }}
+          >
+            <span>信誉分：{creditScore ?? 0}</span>
+            <span>账号状态：{accountStatus === "frozen" ? "冻结" : "正常"}</span>
+          </div>
+        )}
+        {role !== "admin" && creditScore !== null && creditScore <= 70 && (
+          <div
+            style={{
+              marginBottom: "12px",
+              padding: "10px 12px",
+              borderRadius: "8px",
+              border: `1px solid ${creditScore < 60 ? "#b78a84" : "#c4ab87"}`,
+              backgroundColor: creditScore < 60 ? "#f0e1df" : "#eee2d1",
+              color: creditScore < 60 ? "#7a4f4a" : "#6f5740",
+              fontSize: "14px",
+              fontWeight: 600,
+            }}
+          >
+            {creditScore < 60
+              ? "您的信誉分已过低，账号当前冻结，暂时无法预约，请尽快提升信誉分。"
+              : "您的信誉分已低于提醒阈值，请注意保持良好使用记录，避免违规。"}
+          </div>
+        )}
 
         {activeTab === "seatMap" && <SeatMap />}
         {activeTab === "reservations" && <MyReservations />}
@@ -313,10 +392,10 @@ const Dashboard = () => {
             borderRadius: "10px",
             border:
               floatingNotice.type === "danger"
-                ? "1px solid #dc3545"
-                : "1px solid #ffc107",
+                ? `1px solid ${THEME.noticeDangerBorder}`
+                : `1px solid ${THEME.noticeWarnBorder}`,
             backgroundColor:
-              floatingNotice.type === "danger" ? "#fff5f5" : "#fffaf0",
+              floatingNotice.type === "danger" ? THEME.noticeDangerBg : THEME.noticeWarnBg,
             boxShadow: "0 6px 18px rgba(0,0,0,0.16)",
             padding: "12px 14px",
           }}
@@ -348,7 +427,7 @@ const Dashboard = () => {
             {floatingNotice.message}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span style={{ fontSize: "12px", color: "#666" }}>
+            <span style={{ fontSize: "12px", color: THEME.muted }}>
               {floatingNotice.createdAt
                 ? new Date(floatingNotice.createdAt).toLocaleString("zh-CN")
                 : ""}
@@ -357,7 +436,7 @@ const Dashboard = () => {
               onClick={() => setActiveTab("notifications")}
               style={{
                 border: "none",
-                backgroundColor: "#007bff",
+                backgroundColor: THEME.primary,
                 color: "#fff",
                 borderRadius: "4px",
                 padding: "4px 10px",

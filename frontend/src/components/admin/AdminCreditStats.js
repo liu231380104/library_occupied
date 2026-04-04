@@ -1,6 +1,16 @@
 import React, { useEffect, useState } from "react";
 import api from "../../services/api";
 
+const THEME = {
+  panel: "#f8f6f2",
+  card: "#f6f3ee",
+  head: "#efebe4",
+  border: "#d4cec4",
+  text: "#5a605f",
+  textStrong: "#363d3d",
+  danger: "#9f6f69",
+};
+
 const AdminCreditStats = () => {
   const [creditSummary, setCreditSummary] = useState(null);
   const [creditUsers, setCreditUsers] = useState([]);
@@ -25,11 +35,11 @@ const AdminCreditStats = () => {
   };
 
   if (loading) return <div>加载中...</div>;
-  if (error) return <div style={{ color: "red" }}>{error}</div>;
+  if (error) return <div style={{ color: THEME.danger }}>{error}</div>;
 
   return (
-    <div>
-      <h2>信誉分统计</h2>
+    <div style={{ background: THEME.panel, border: `1px solid ${THEME.border}`, borderRadius: "10px", padding: "14px", color: "#454d4e" }}>
+      <h2 style={{ color: THEME.textStrong }}>信誉分统计</h2>
       <div
         style={{
           display: "flex",
@@ -41,8 +51,9 @@ const AdminCreditStats = () => {
         <div
           style={{
             padding: "10px 12px",
-            background: "#f4f4f4",
+            background: THEME.card,
             borderRadius: "6px",
+            color: THEME.textStrong,
           }}
         >
           用户总数：{creditSummary?.total_users ?? 0}
@@ -50,8 +61,9 @@ const AdminCreditStats = () => {
         <div
           style={{
             padding: "10px 12px",
-            background: "#f4f4f4",
+            background: THEME.card,
             borderRadius: "6px",
+            color: THEME.textStrong,
           }}
         >
           平均信誉分：{creditSummary?.avg_credit ?? 0}
@@ -59,8 +71,9 @@ const AdminCreditStats = () => {
         <div
           style={{
             padding: "10px 12px",
-            background: "#f4f4f4",
+            background: THEME.card,
             borderRadius: "6px",
+            color: THEME.textStrong,
           }}
         >
           最低信誉分：{creditSummary?.min_credit ?? 0}
@@ -68,8 +81,9 @@ const AdminCreditStats = () => {
         <div
           style={{
             padding: "10px 12px",
-            background: "#f4f4f4",
+            background: THEME.card,
             borderRadius: "6px",
+            color: THEME.textStrong,
           }}
         >
           最高信誉分：{creditSummary?.max_credit ?? 0}
@@ -81,8 +95,9 @@ const AdminCreditStats = () => {
           <thead>
             <tr
               style={{
-                backgroundColor: "#f4f4f4",
-                borderBottom: "2px solid #ddd",
+                backgroundColor: THEME.head,
+                borderBottom: `2px solid ${THEME.border}`,
+                color: THEME.textStrong,
               }}
             >
               <th style={{ padding: "10px", textAlign: "left" }}>用户ID</th>
@@ -94,7 +109,7 @@ const AdminCreditStats = () => {
           </thead>
           <tbody>
             {creditUsers.map((user) => (
-              <tr key={user.user_id} style={{ borderBottom: "1px solid #ddd" }}>
+              <tr key={user.user_id} style={{ borderBottom: `1px solid ${THEME.border}` }}>
                 <td style={{ padding: "10px" }}>{user.user_id}</td>
                 <td style={{ padding: "10px" }}>{user.username}</td>
                 <td style={{ padding: "10px" }}>

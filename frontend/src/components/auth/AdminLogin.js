@@ -30,6 +30,8 @@ const AdminLogin = () => {
       }
       setMessage(response.data.message);
       sessionStorage.setItem("token", response.data.token);
+      sessionStorage.setItem("creditScore", String(response.data.credit_score ?? ""));
+      sessionStorage.setItem("accountStatus", response.data.status || "active");
       navigate("/dashboard");
     } catch (error) {
       sessionStorage.removeItem("token");
@@ -43,8 +45,9 @@ const AdminLogin = () => {
         maxWidth: "400px",
         margin: "50px auto",
         padding: "20px",
-        border: "1px solid #ccc",
-        borderRadius: "5px",
+        border: "1px solid #d8d2c9",
+        borderRadius: "8px",
+        backgroundColor: "#fcfbf8",
       }}
     >
       <h2>管理员登录</h2>
@@ -69,7 +72,7 @@ const AdminLogin = () => {
             required
           />
         </div>
-        <button type="submit">登录</button>
+        <button type="submit" style={{ background: "#7f95a6", color: "#fff", border: "none", borderRadius: "6px", padding: "8px 14px", marginTop: "10px", cursor: "pointer" }}>登录</button>
       </form>
       {message && <p>{message}</p>}
       <p>

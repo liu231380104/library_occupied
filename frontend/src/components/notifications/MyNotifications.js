@@ -42,14 +42,14 @@ const MyNotifications = () => {
   const getCardStyle = (type) => {
     if (type === "danger") {
       return {
-        border: "1px solid #dc3545",
-        backgroundColor: "#fff5f5",
+        border: "1px solid #b78a84",
+        backgroundColor: "#f2e8e7",
       };
     }
 
     return {
-      border: "1px solid #ffc107",
-      backgroundColor: "#fffaf0",
+      border: "1px solid #c4ab87",
+      backgroundColor: "#f3ece1",
     };
   };
 
@@ -57,9 +57,9 @@ const MyNotifications = () => {
   if (error) return <div>{error}</div>;
 
   return (
-    <div style={{ marginTop: "24px" }}>
+    <div style={{ marginTop: "24px", background: "#fcfbf8", border: "1px solid #d8d2c9", borderRadius: "10px", padding: "14px" }}>
       <h3>消息提醒</h3>
-      <p style={{ color: "#666" }}>系统每30秒自动刷新一次提醒。</p>
+      <p style={{ color: "#5f6768" }}>系统每30秒自动刷新一次提醒。</p>
 
       {notifications.length === 0 ? (
         <p>暂无消息提醒</p>
@@ -77,8 +77,8 @@ const MyNotifications = () => {
               <div style={{ fontWeight: "bold", marginBottom: "6px" }}>
                 {item.title}
               </div>
-              <div style={{ marginBottom: "6px" }}>{item.message}</div>
-              <div style={{ fontSize: "12px", color: "#666" }}>
+              <div style={{ marginBottom: "6px", color: "#454d4e" }}>{item.message}</div>
+              <div style={{ fontSize: "12px", color: "#646d6e" }}>
                 {item.createdAt
                   ? new Date(item.createdAt).toLocaleString("zh-CN")
                   : ""}

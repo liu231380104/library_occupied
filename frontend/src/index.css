@@ -1,3 +1,18 @@
+ :root {
+  --bg: #f6f4f0;
+  --panel: #fefdfb;
+  --panel-soft: #f7f4ef;
+  --text: #434b4c;
+  --text-strong: #31393a;
+  --muted: #646d6e;
+  --border: #d8d2c9;
+  --primary: #7f95a6;
+  --primary-hover: #738899;
+  --success: #8ca79a;
+  --warning: #c4ab87;
+  --danger: #b78a84;
+}
+
 body {
   margin: 0;
   font-family:
@@ -5,9 +20,38 @@ body {
     "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: var(--bg);
+  color: var(--text);
 }
 
 code {
   font-family:
     source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
 }
+
+h1, h2, h3, h4 {
+  color: var(--text-strong);
+}
+
+a {
+  color: var(--primary);
+}
+
+button {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  background: #fff;
+  color: var(--text-strong);
+}
+
+table {
+  background: var(--panel);
+}
+

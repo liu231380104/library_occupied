@@ -2,6 +2,11 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db");
+const {
+  getCreditReminder,
+  syncUserStatusByCredit,
+  syncUserStatusesByCredit,
+} = require("../utils/creditPolicy");
 
 const router = express.Router();
 
@@ -39,6 +44,8 @@ const expireOverduePendingReservations = async (connection) => {
      WHERE user_id IN (?)`,
     [userIds],
   );
+
+  await syncUserStatusesByCredit(connection, userIds);
 };
 
 // 中间件：验证JWT token
@@ -83,6 +90,11 @@ router.post("/", authenticateToken, async (req, res) => {
 
     await expireOverduePendingReservations(connection);
 
+    const currentUser = await syncUserStatusByCredit(connection, userId);
+    if (currentUser?.status === "frozen") {
+      return res.status(403).json({ message: "账号信誉分过低，当前已冻结，暂时无法预约" });
+    }
+
     // 检查座位是否存在且为空闲状态
     const [seatRows] = await connection.query(
       "SELECT * FROM seats WHERE seat_id = ? AND status = 0",
@@ -117,7 +129,7 @@ router.post("/", authenticateToken, async (req, res) => {
     ]);
 
     res.status(201).json({
-      message: "预约成功，请到座后点击“已入座”",
+      message: "预约成功，系统将保留15分钟",
       reservationId: result.insertId,
     });
   } catch (error) {
@@ -202,6 +214,8 @@ router.post("/:reservationId/checkin", authenticateToken, async (req, res) => {
       "UPDATE users SET credit_score = LEAST(100, credit_score + 2) WHERE user_id = ?",
       [userId],
     );
+
+    await syncUserStatusByCredit(connection, userId);
 
     res.json({ message: "已入座，状态已更新" });
   } catch (error) {
@@ -300,6 +314,20 @@ router.get("/notifications", authenticateToken, async (req, res) => {
 
     await expireOverduePendingReservations(connection);
 
+    const [userRows] = await connection.query(
+      "SELECT user_id, username, credit_score, status FROM users WHERE user_id = ? LIMIT 1",
+      [userId],
+    );
+
+    const lowCreditReminder = userRows[0]
+      ? getCreditReminder(
+          userRows[0].credit_score,
+          userRows[0].user_id,
+          userRows[0].username,
+          userRows[0].status,
+        )
+      : null;
+
     // 1) 待签到超过10分钟的提醒（15分钟规则）
     const [pendingRows] = await connection.query(
       `SELECT r.reservation_id, r.start_time, s.seat_number, s.area,
@@ -347,7 +375,7 @@ router.get("/notifications", authenticateToken, async (req, res) => {
       createdAt: row.end_time,
     }));
 
-    const notifications = [...reminders, ...violatedAlerts].sort(
+    const notifications = [...reminders, ...violatedAlerts, ...(lowCreditReminder ? [lowCreditReminder] : [])].sort(
       (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
     );
 

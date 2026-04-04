@@ -34,16 +34,16 @@ const MyReports = () => {
     }
   };
 
-  const getStatusColor = (status) => {
+  const getStatusBadgeStyle = (status) => {
     switch (status) {
       case "pending":
-        return "#ffa500";
+        return { bg: "#eee2d1", text: "#6f5740", border: "#c4ab87" };
       case "valid":
-        return "#28a745";
+        return { bg: "#e1ebe5", text: "#476457", border: "#8ca79a" };
       case "invalid":
-        return "#dc3545";
+        return { bg: "#f0e1df", text: "#7a4f4a", border: "#b78a84" };
       default:
-        return "#6c757d";
+        return { bg: "#ecefee", text: "#596263", border: "#9aa2a0" };
     }
   };
 
@@ -51,7 +51,7 @@ const MyReports = () => {
   if (error) return <div>{error}</div>;
 
   return (
-    <div style={{ marginTop: "30px" }}>
+    <div style={{ marginTop: "30px", background: "#fcfbf8", border: "1px solid #d8d2c9", borderRadius: "10px", padding: "14px" }}>
       <h3>我的举报记录</h3>
       {reports.length === 0 ? (
         <p>暂无举报记录</p>
@@ -64,16 +64,16 @@ const MyReports = () => {
           }}
         >
           <thead>
-            <tr style={{ backgroundColor: "#f8f9fa" }}>
-              <th style={{ border: "1px solid #ddd", padding: "8px" }}>座位</th>
-              <th style={{ border: "1px solid #ddd", padding: "8px" }}>区域</th>
-              <th style={{ border: "1px solid #ddd", padding: "8px" }}>描述</th>
-              <th style={{ border: "1px solid #ddd", padding: "8px" }}>证据</th>
-              <th style={{ border: "1px solid #ddd", padding: "8px" }}>状态</th>
-              <th style={{ border: "1px solid #ddd", padding: "8px" }}>
+              <tr style={{ backgroundColor: "#f1eee8" }}>
+              <th style={{ border: "1px solid #d8d2c9", padding: "8px" }}>座位</th>
+              <th style={{ border: "1px solid #d8d2c9", padding: "8px" }}>区域</th>
+              <th style={{ border: "1px solid #d8d2c9", padding: "8px" }}>描述</th>
+              <th style={{ border: "1px solid #d8d2c9", padding: "8px" }}>证据</th>
+              <th style={{ border: "1px solid #d8d2c9", padding: "8px" }}>状态</th>
+              <th style={{ border: "1px solid #d8d2c9", padding: "8px" }}>
                 管理员备注
               </th>
-              <th style={{ border: "1px solid #ddd", padding: "8px" }}>
+              <th style={{ border: "1px solid #d8d2c9", padding: "8px" }}>
                 提交时间
               </th>
             </tr>
@@ -81,16 +81,16 @@ const MyReports = () => {
           <tbody>
             {reports.map((report) => (
               <tr key={report.report_id}>
-                <td style={{ border: "1px solid #ddd", padding: "8px" }}>
+                <td style={{ border: "1px solid #d8d2c9", padding: "8px" }}>
                   {report.seat_number}
                 </td>
-                <td style={{ border: "1px solid #ddd", padding: "8px" }}>
+                <td style={{ border: "1px solid #d8d2c9", padding: "8px" }}>
                   {report.area}
                 </td>
-                <td style={{ border: "1px solid #ddd", padding: "8px" }}>
+                <td style={{ border: "1px solid #d8d2c9", padding: "8px" }}>
                   {report.description || "无"}
                 </td>
-                <td style={{ border: "1px solid #ddd", padding: "8px" }}>
+                <td style={{ border: "1px solid #d8d2c9", padding: "8px" }}>
                   {report.evidence_img ? (
                     <a
                       href={report.evidence_img}
@@ -103,15 +103,22 @@ const MyReports = () => {
                     "无"
                   )}
                 </td>
-                <td style={{ border: "1px solid #ddd", padding: "8px" }}>
-                  <span style={{ color: getStatusColor(report.report_status) }}>
+                <td style={{ border: "1px solid #d8d2c9", padding: "8px" }}>
+                  <span style={{
+                    backgroundColor: getStatusBadgeStyle(report.report_status).bg,
+                    color: getStatusBadgeStyle(report.report_status).text,
+                    border: `1px solid ${getStatusBadgeStyle(report.report_status).border}`,
+                    padding: "2px 8px",
+                    borderRadius: "999px",
+                    fontWeight: 600,
+                  }}>
                     {getStatusText(report.report_status)}
                   </span>
                 </td>
-                <td style={{ border: "1px solid #ddd", padding: "8px" }}>
+                <td style={{ border: "1px solid #d8d2c9", padding: "8px" }}>
                   {report.admin_remark || "无"}
                 </td>
-                <td style={{ border: "1px solid #ddd", padding: "8px" }}>
+                <td style={{ border: "1px solid #d8d2c9", padding: "8px" }}>
                   {new Date(report.created_at).toLocaleString("zh-CN")}
                 </td>
               </tr>

@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS `reports` (
   `description` TEXT,                        -- 举报描述
   -- 状态：pending-待审核, valid-属实(扣分), invalid-驳回
   `report_status` ENUM('pending', 'valid', 'invalid') DEFAULT 'pending',
+  `reported_seat_status` TINYINT DEFAULT NULL,     -- 举报提交时座位状态快照（用于驳回恢复）
   `admin_remark` TEXT,                       -- 管理员处理意见
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`reporter_id`) REFERENCES `users`(`user_id`),

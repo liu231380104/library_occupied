@@ -36,8 +36,9 @@ const Register = () => {
         maxWidth: "400px",
         margin: "50px auto",
         padding: "20px",
-        border: "1px solid #ccc",
-        borderRadius: "5px",
+        border: "1px solid #d8d2c9",
+        borderRadius: "8px",
+        backgroundColor: "#fcfbf8",
       }}
     >
       <h2>用户注册</h2>
@@ -62,7 +63,7 @@ const Register = () => {
             required
           />
         </div>
-        <button type="submit">注册</button>
+        <button type="submit" style={{ background: "#7f95a6", color: "#fff", border: "none", borderRadius: "6px", padding: "8px 14px", marginTop: "10px", cursor: "pointer" }}>注册</button>
       </form>
       {message && <p>{message}</p>}
       <p>

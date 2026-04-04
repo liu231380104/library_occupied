@@ -283,6 +283,9 @@ app.post("/api/confirm-seats", async (req, res) => {
   const seats = Array.isArray(req.body?.seats) ? req.body.seats : [];
   const confirmedVideoPath = String(req.body?.videoPath || "").trim();
   const confirmedFrame = Number.isFinite(Number(req.body?.frame)) ? Number(req.body.frame) : 0;
+  const previewImageUrl = typeof req.body?.previewImageUrl === "string"
+    ? req.body.previewImageUrl.trim()
+    : "";
   const sourceVideo = req.body?.sourceVideo && typeof req.body.sourceVideo === "object"
     ? req.body.sourceVideo
     : null;
@@ -311,6 +314,10 @@ app.post("/api/confirm-seats", async (req, res) => {
     saveSeatMeta({
       videoPath: confirmedVideoPath || DEFAULT_TEST_VIDEO,
       frame: confirmedFrame,
+      area,
+      prefix,
+      seats: normalizedSeats,
+      previewImageUrl: previewImageUrl || "/python-assets/results/annotated_seats.jpg",
       sourceVideo,
       seatsCount: normalizedSeats.length,
       savedAt: Date.now(),

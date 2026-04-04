@@ -2,6 +2,24 @@ import React, { useState, useEffect } from "react";
 import api from "../../services/api";
 import { getUserRole } from "../../utils/tokenUtils";
 
+const THEME = {
+  pageBg: "#f2efea",
+  panelBg: "#fcfbf8",
+  border: "#d8d2c9",
+  text: "#3f4748",
+  mutedText: "#5f6768",
+  primary: "#7f95a6",
+  danger: "#b78a84",
+  warning: "#c4ab87",
+  success: "#8ca79a",
+  status: {
+    free: "#a6b8a7",
+    reserved: "#cbbca3",
+    occupied: "#c19d98",
+    abnormal: "#b5a5bb",
+  },
+};
+
 const SeatMap = () => {
   const [role, setRole] = useState(null);
   const [areas, setAreas] = useState([]);
@@ -22,6 +40,7 @@ const SeatMap = () => {
   const [showViolationForm, setShowViolationForm] = useState(false);
   const [violationSeat, setViolationSeat] = useState(null);
   const [violationDescription, setViolationDescription] = useState("");
+  const [hoveredSeatId, setHoveredSeatId] = useState(null);
 
   useEffect(() => {
     // 从 token 解析 role
@@ -73,15 +92,15 @@ const SeatMap = () => {
   const getSeatColor = (status) => {
     switch (status) {
       case 0:
-        return "green"; // 空闲
+        return THEME.status.free; // 空闲
       case 1:
-        return "yellow"; // 已预约
+        return THEME.status.reserved; // 已预约
       case 2:
-        return "red"; // 已占用
+        return THEME.status.occupied; // 已占用
       case 3:
-        return "purple"; // 异常占座
+        return THEME.status.abnormal; // 异常占座
       default:
-        return "white";
+        return "#ffffff";
     }
   };
 
@@ -99,6 +118,53 @@ const SeatMap = () => {
         return "未知";
     }
   };
+
+  const getSeatTextColor = (status) => {
+    if (status === 0 || status === 1) return "#2f3637";
+    return "#ffffff";
+  };
+
+  const toAbsoluteAssetUrl = (rawUrl) => {
+    if (!rawUrl || typeof rawUrl !== "string") return "";
+    if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
+    const normalized = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
+    return `http://localhost:5000${normalized}`;
+  };
+
+  const seatWithPreview = seats.find((seat) => seat?.seat_preview_url);
+  const seatMapPreviewUrl = toAbsoluteAssetUrl(seatWithPreview?.seat_preview_url);
+  const seatMapNaturalWidth = Number(seatWithPreview?.seat_preview_size?.width) || 1280;
+  const seatMapNaturalHeight = Number(seatWithPreview?.seat_preview_size?.height) || 720;
+  const seatMapDisplayWidth = 520;
+  const seatMapDisplayHeight = Math.round(
+    (seatMapDisplayWidth * seatMapNaturalHeight) / Math.max(seatMapNaturalWidth, 1),
+  );
+
+  // 仅调整左侧网格展示顺序：尽量与右侧座位图空间位置一致（先上后下，再左到右）
+  const orderedSeats = [...seats].sort((a, b) => {
+    const aBox = Array.isArray(a?.seat_bbox) && a.seat_bbox.length === 4 ? a.seat_bbox : null;
+    const bBox = Array.isArray(b?.seat_bbox) && b.seat_bbox.length === 4 ? b.seat_bbox : null;
+
+    if (aBox && bBox) {
+      const aCenterY = (Number(aBox[1]) + Number(aBox[3])) / 2;
+      const bCenterY = (Number(bBox[1]) + Number(bBox[3])) / 2;
+      const aCenterX = (Number(aBox[0]) + Number(aBox[2])) / 2;
+      const bCenterX = (Number(bBox[0]) + Number(bBox[2])) / 2;
+
+      // 同一“行”容差，避免轻微检测抖动导致顺序跳动
+      if (Math.abs(aCenterY - bCenterY) <= 24) {
+        return aCenterX - bCenterX;
+      }
+      return aCenterY - bCenterY;
+    }
+
+    if (aBox && !bBox) return -1;
+    if (!aBox && bBox) return 1;
+
+    const aNum = Number(String(a?.seat_number || "").replace(/\D/g, "")) || Number(a?.seat_id) || 0;
+    const bNum = Number(String(b?.seat_number || "").replace(/\D/g, "")) || Number(b?.seat_id) || 0;
+    return aNum - bNum;
+  });
 
   const handleSeatClick = (seat) => {
     // 管理员可以编辑座位状态
@@ -202,7 +268,7 @@ const SeatMap = () => {
     }
 
     try {
-      const response = await api.post("/violations", {
+      await api.post("/violations", {
         seat_id: violationSeat.seat_id,
         description: violationDescription.trim(),
       });
@@ -232,7 +298,7 @@ const SeatMap = () => {
       });
 
       console.log("Reservation response:", response);
-      alert("预约成功！请到座后在预约列表点击已入座");
+      alert("预约成功，系统将保留15分钟");
       setShowReservationForm(false);
       setSelectedSeat(null);
       // 刷新座位状态
@@ -256,7 +322,7 @@ const SeatMap = () => {
   if (error) return <div>{error}</div>;
 
   return (
-    <div style={{ padding: "20px" }}>
+    <div style={{ padding: "20px", backgroundColor: THEME.pageBg, color: THEME.text, borderRadius: "10px" }}>
       <div
         style={{
           display: "flex",
@@ -310,7 +376,7 @@ const SeatMap = () => {
                 }}
                 style={{
                   padding: "6px 12px",
-                  backgroundColor: "#007bff",
+                  backgroundColor: THEME.primary,
                   color: "white",
                   border: "none",
                   borderRadius: "4px",
@@ -323,63 +389,148 @@ const SeatMap = () => {
           )}
         </div>
       </div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
-          gap: "10px",
-          maxWidth: "600px",
-        }}
-      >
-        {seats.map((seat) => (
-          <div
-            key={seat.seat_id}
-            style={{
-              width: "100px",
-              height: "100px",
-              backgroundColor: getSeatColor(seat.status),
-              border: "2px solid #000",
-              borderRadius: "5px",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: role === "admin" || seat.status === 0 ? "pointer" : "not-allowed",
-              color: seat.status === 1 ? "#000" : "#fff",
-            }}
-            onClick={() => handleSeatClick(seat)}
-            title={
-              seat.status === 0
-                ? `点击预约 ${seat.seat_number}`
-                : `${seat.seat_number} - ${getStatusText(seat.status)}`
-            }
-          >
-            <div style={{ fontSize: "18px", fontWeight: "bold" }}>
-              {seat.seat_number}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: "18px", flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, 1fr)",
+            gap: "10px",
+            maxWidth: "600px",
+          }}
+        >
+          {orderedSeats.map((seat) => (
+            <div
+              key={seat.seat_id}
+              style={{
+                width: "100px",
+                height: "100px",
+                backgroundColor: getSeatColor(seat.status),
+                border: `2px solid ${THEME.border}`,
+                borderRadius: "5px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: role === "admin" || seat.status === 0 ? "pointer" : "not-allowed",
+                color: getSeatTextColor(seat.status),
+              }}
+              onClick={() => handleSeatClick(seat)}
+              onMouseEnter={() => setHoveredSeatId(seat.seat_id)}
+              onMouseLeave={() => setHoveredSeatId(null)}
+              title={
+                seat.status === 0
+                  ? `点击预约 ${seat.seat_number}`
+                  : `${seat.seat_number} - ${getStatusText(seat.status)}`
+              }
+            >
+              <div style={{ fontSize: "18px", fontWeight: "bold" }}>
+                {seat.seat_number}
+              </div>
+              <div style={{ fontSize: "12px" }}>{getStatusText(seat.status)}</div>
+              {role !== "admin" && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleReportClick(seat);
+                  }}
+                  style={{
+                    marginTop: "5px",
+                    padding: "2px 6px",
+                    fontSize: "12px",
+                    border: `1px solid ${THEME.danger}`,
+                    borderRadius: "4px",
+                    backgroundColor: "#ffffff",
+                    color: THEME.danger,
+                    cursor: "pointer",
+                  }}
+                >
+                  举报状态
+                </button>
+              )}
             </div>
-            <div style={{ fontSize: "12px" }}>{getStatusText(seat.status)}</div>
-            {role !== "admin" && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleReportClick(seat);
-                }}
-                style={{
-                  marginTop: "5px",
-                  padding: "2px 6px",
-                  fontSize: "12px",
-                  border: "1px solid #dc3545",
-                  borderRadius: "4px",
-                  backgroundColor: "#fff",
-                  color: "#dc3545",
-                  cursor: "pointer",
-                }}
-              >
-                举报状态
-              </button>
-            )}
-          </div>
-        ))}
+          ))}
+        </div>
+
+        <div style={{ minWidth: "520px", flex: "1 1 520px" }}>
+          <h3 style={{ marginTop: 0, marginBottom: "8px" }}>座位图</h3>
+          {seatMapPreviewUrl ? (
+            <div
+              style={{
+                position: "relative",
+                width: `${seatMapDisplayWidth}px`,
+                height: `${seatMapDisplayHeight}px`,
+                maxWidth: "100%",
+                border: `1px solid ${THEME.border}`,
+                borderRadius: "8px",
+                overflow: "hidden",
+                background: "#5f6768",
+              }}
+            >
+              <img
+                src={seatMapPreviewUrl}
+                alt="seat-map-preview"
+                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+              />
+              {seats.map((seat) => {
+                const bbox = Array.isArray(seat?.seat_bbox) ? seat.seat_bbox : null;
+                if (!bbox || bbox.length !== 4) return null;
+
+                const [x1, y1, x2, y2] = bbox.map((v) => Number(v));
+                if (![x1, y1, x2, y2].every(Number.isFinite) || x2 <= x1 || y2 <= y1) {
+                  return null;
+                }
+
+                const sx = seatMapDisplayWidth / Math.max(seatMapNaturalWidth, 1);
+                const sy = seatMapDisplayHeight / Math.max(seatMapNaturalHeight, 1);
+                const isHover = hoveredSeatId === seat.seat_id;
+
+                return (
+                  <div
+                    key={`map-box-${seat.seat_id}`}
+                    style={{
+                      position: "absolute",
+                      left: `${x1 * sx}px`,
+                      top: `${y1 * sy}px`,
+                      width: `${Math.max(8, (x2 - x1) * sx)}px`,
+                      height: `${Math.max(8, (y2 - y1) * sy)}px`,
+                      border: isHover ? `2px solid ${THEME.warning}` : "1px solid rgba(255,255,255,0.55)",
+                      background: isHover ? "rgba(196, 171, 135, 0.26)" : "rgba(255,255,255,0.08)",
+                      boxSizing: "border-box",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    <span
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        top: 0,
+                        fontSize: "10px",
+                        color: "#fff",
+                        background: isHover ? "#8f7a5f" : "rgba(0,0,0,0.45)",
+                        padding: "1px 3px",
+                      }}
+                    >
+                      {seat.seat_number}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div
+              style={{
+                width: `${seatMapDisplayWidth}px`,
+                maxWidth: "100%",
+                border: `1px dashed ${THEME.border}`,
+                borderRadius: "8px",
+                padding: "18px",
+                color: THEME.mutedText,
+              }}
+            >
+              暂无座位图。请先到“视频座位配置”页面识别并确认座位。
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={{ marginTop: "20px" }}>
@@ -390,7 +541,7 @@ const SeatMap = () => {
               style={{
                 width: "20px",
                 height: "20px",
-                backgroundColor: "green",
+                backgroundColor: THEME.status.free,
                 marginRight: "5px",
               }}
             ></div>
@@ -401,7 +552,7 @@ const SeatMap = () => {
               style={{
                 width: "20px",
                 height: "20px",
-                backgroundColor: "yellow",
+                backgroundColor: THEME.status.reserved,
                 marginRight: "5px",
               }}
             ></div>
@@ -412,7 +563,7 @@ const SeatMap = () => {
               style={{
                 width: "20px",
                 height: "20px",
-                backgroundColor: "red",
+                backgroundColor: THEME.status.occupied,
                 marginRight: "5px",
               }}
             ></div>
@@ -423,7 +574,7 @@ const SeatMap = () => {
               style={{
                 width: "20px",
                 height: "20px",
-                backgroundColor: "purple",
+                backgroundColor: THEME.status.abnormal,
                 marginRight: "5px",
               }}
             ></div>
@@ -441,7 +592,7 @@ const SeatMap = () => {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.5)",
+              backgroundColor: "rgba(79, 87, 88, 0.35)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -450,9 +601,10 @@ const SeatMap = () => {
         >
           <div
             style={{
-              backgroundColor: "white",
+              backgroundColor: THEME.panelBg,
               padding: "20px",
               borderRadius: "8px",
+              border: `1px solid ${THEME.border}`,
               maxWidth: "400px",
               width: "90%",
             }}
@@ -461,8 +613,9 @@ const SeatMap = () => {
             <form onSubmit={handleReservationSubmit}>
               <div style={{ marginBottom: "15px" }}>
                 <p>
-                  点击预约后，座位进入“已预约”状态。抵达后请在我的预约中点击“已入座”。
+                  点击预约后，座位进入“已预约”状态，系统仅保留15分钟。
                 </p>
+                <p>请在15分钟内到座并在“我的预约”中点击“已入座”。</p>
                 <p>若已放弃请点击“取消”按钮。</p>
               </div>
 
@@ -478,7 +631,7 @@ const SeatMap = () => {
                   onClick={closeReservationForm}
                   style={{
                     padding: "8px 16px",
-                    backgroundColor: "#ccc",
+                    backgroundColor: "#ddd7ce",
                     border: "none",
                     borderRadius: "4px",
                     cursor: "pointer",
@@ -491,7 +644,7 @@ const SeatMap = () => {
                   disabled={reserving}
                   style={{
                     padding: "8px 16px",
-                    backgroundColor: reserving ? "#ccc" : "#007bff",
+                    backgroundColor: reserving ? "#b2aba1" : THEME.primary,
                     color: "white",
                     border: "none",
                     borderRadius: "4px",
@@ -514,7 +667,7 @@ const SeatMap = () => {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            backgroundColor: "rgba(79, 87, 88, 0.35)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -523,9 +676,10 @@ const SeatMap = () => {
         >
           <div
             style={{
-              backgroundColor: "white",
+              backgroundColor: THEME.panelBg,
               padding: "20px",
               borderRadius: "8px",
+              border: `1px solid ${THEME.border}`,
               maxWidth: "400px",
               width: "90%",
             }}
@@ -571,7 +725,7 @@ const SeatMap = () => {
                   }}
                   style={{
                     padding: "8px 16px",
-                    backgroundColor: "#ccc",
+                    backgroundColor: "#ddd7ce",
                     border: "none",
                     borderRadius: "4px",
                     cursor: "pointer",
@@ -583,7 +737,7 @@ const SeatMap = () => {
                   type="submit"
                   style={{
                     padding: "8px 16px",
-                    backgroundColor: "#dc3545",
+                    backgroundColor: THEME.danger,
                     color: "white",
                     border: "none",
                     borderRadius: "4px",
@@ -606,7 +760,7 @@ const SeatMap = () => {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            backgroundColor: "rgba(79, 87, 88, 0.35)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -615,9 +769,10 @@ const SeatMap = () => {
         >
           <div
             style={{
-              backgroundColor: "white",
+              backgroundColor: THEME.panelBg,
               padding: "20px",
               borderRadius: "8px",
+              border: `1px solid ${THEME.border}`,
               maxWidth: "400px",
               width: "90%",
             }}
@@ -635,7 +790,7 @@ const SeatMap = () => {
                       marginTop: "8px",
                       padding: "8px",
                       borderRadius: "4px",
-                      border: "1px solid #ccc",
+                      border: `1px solid ${THEME.border}`,
                     }}
                   >
                     <option value={0}>空闲</option>
@@ -661,7 +816,7 @@ const SeatMap = () => {
                   }}
                   style={{
                     padding: "8px 16px",
-                    backgroundColor: "#ccc",
+                    backgroundColor: "#ddd7ce",
                     border: "none",
                     borderRadius: "4px",
                     cursor: "pointer",
@@ -673,7 +828,7 @@ const SeatMap = () => {
                   type="submit"
                   style={{
                     padding: "8px 16px",
-                    backgroundColor: "#007bff",
+                    backgroundColor: THEME.primary,
                     color: "white",
                     border: "none",
                     borderRadius: "4px",
@@ -697,7 +852,7 @@ const SeatMap = () => {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            backgroundColor: "rgba(79, 87, 88, 0.35)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -706,9 +861,10 @@ const SeatMap = () => {
         >
           <div
             style={{
-              backgroundColor: "white",
+              backgroundColor: THEME.panelBg,
               padding: "20px",
               borderRadius: "8px",
+              border: `1px solid ${THEME.border}`,
               maxWidth: "400px",
               width: "90%",
             }}
@@ -729,7 +885,7 @@ const SeatMap = () => {
                       marginTop: "8px",
                       padding: "8px",
                       borderRadius: "4px",
-                      border: "1px solid #ccc",
+                      border: `1px solid ${THEME.border}`,
                     }}
                   />
                 </label>
@@ -751,7 +907,7 @@ const SeatMap = () => {
                   }}
                   style={{
                     padding: "8px 16px",
-                    backgroundColor: "#ccc",
+                    backgroundColor: "#ddd7ce",
                     border: "none",
                     borderRadius: "4px",
                     cursor: "pointer",
@@ -763,7 +919,7 @@ const SeatMap = () => {
                   type="submit"
                   style={{
                     padding: "8px 16px",
-                    backgroundColor: "#007bff",
+                    backgroundColor: THEME.primary,
                     color: "white",
                     border: "none",
                     borderRadius: "4px",

@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db");
+const { syncUserStatusByCredit } = require("../utils/creditPolicy");
 
 const router = express.Router();
 
@@ -86,7 +87,15 @@ router.post("/login", async (req, res) => {
       { expiresIn: "24h" },
     );
 
-    res.json({ message: "登录成功", token, role: userRole });
+    const syncedUser = await syncUserStatusByCredit(connection, user.user_id);
+
+    res.json({
+      message: "登录成功",
+      token,
+      role: userRole,
+      credit_score: syncedUser?.credit_score ?? user.credit_score ?? 0,
+      status: syncedUser?.status ?? user.status ?? "active",
+    });
   } catch (error) {
     console.log("Server error:", error);
     res.status(500).json({ message: "服务器错误" });

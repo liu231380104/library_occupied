@@ -72,20 +72,20 @@ const MyReservations = () => {
     }
   };
 
-  const getStatusColor = (status) => {
+  const getStatusBadgeStyle = (status) => {
     switch (status) {
       case "pending":
-        return "#ffa500"; // 橙色
+        return { bg: "#eee2d1", text: "#6f5740", border: "#c4ab87" };
       case "active":
-        return "#007bff"; // 蓝色
+        return { bg: "#dde5ec", text: "#425867", border: "#7f95a6" };
       case "completed":
-        return "#28a745"; // 绿色
+        return { bg: "#e1ebe5", text: "#476457", border: "#8ca79a" };
       case "cancelled":
-        return "#6c757d"; // 灰色
+        return { bg: "#ecefee", text: "#596263", border: "#9aa2a0" };
       case "violated":
-        return "#dc3545"; // 红色
+        return { bg: "#f0e1df", text: "#7a4f4a", border: "#b78a84" };
       default:
-        return "#000";
+        return { bg: "#ecefee", text: "#596263", border: "#9aa2a0" };
     }
   };
 
@@ -93,8 +93,22 @@ const MyReservations = () => {
   if (error) return <div>{error}</div>;
 
   return (
-    <div style={{ marginTop: "30px" }}>
+    <div style={{ marginTop: "30px", background: "#fcfbf8", border: "1px solid #d8d2c9", borderRadius: "10px", padding: "14px" }}>
       <h3>我的预约记录</h3>
+      <div
+        style={{
+          marginBottom: "12px",
+          padding: "8px 10px",
+          borderRadius: "8px",
+          border: "1px solid #c4ab87",
+          backgroundColor: "#eee2d1",
+          color: "#6f5740",
+          fontSize: "13px",
+          fontWeight: 600,
+        }}
+      >
+        提醒：每次预约仅保留15分钟，超时未签到将自动判定违规并扣除信誉分。
+      </div>
       {reservations.length === 0 ? (
         <p>暂无预约记录</p>
       ) : (
@@ -103,10 +117,10 @@ const MyReservations = () => {
             <div
               key={reservation.reservation_id}
               style={{
-                border: "1px solid #ddd",
+                border: "1px solid #d8d2c9",
                 borderRadius: "8px",
                 padding: "15px",
-                backgroundColor: "#f9f9f9",
+                backgroundColor: "#f6f2ec",
               }}
             >
               <div
@@ -133,7 +147,14 @@ const MyReservations = () => {
                   <p>
                     状态:{" "}
                     <span
-                      style={{ color: getStatusColor(reservation.res_status) }}
+                      style={{
+                        backgroundColor: getStatusBadgeStyle(reservation.res_status).bg,
+                        color: getStatusBadgeStyle(reservation.res_status).text,
+                        border: `1px solid ${getStatusBadgeStyle(reservation.res_status).border}`,
+                        padding: "2px 8px",
+                        borderRadius: "999px",
+                        fontWeight: 600,
+                      }}
                     >
                       {getStatusText(reservation.res_status)}
                     </span>
@@ -148,7 +169,7 @@ const MyReservations = () => {
                         }
                         style={{
                           padding: "8px 16px",
-                          backgroundColor: "#007bff",
+                          backgroundColor: "#7f95a6",
                           color: "white",
                           border: "none",
                           borderRadius: "4px",
@@ -163,7 +184,7 @@ const MyReservations = () => {
                         }
                         style={{
                           padding: "8px 16px",
-                          backgroundColor: "#dc3545",
+                          backgroundColor: "#b78a84",
                           color: "white",
                           border: "none",
                           borderRadius: "4px",
@@ -180,7 +201,7 @@ const MyReservations = () => {
                       onClick={() => handleLeave(reservation.reservation_id)}
                       style={{
                         padding: "8px 16px",
-                        backgroundColor: "#28a745",
+                        backgroundColor: "#8ca79a",
                         color: "white",
                         border: "none",
                         borderRadius: "4px",

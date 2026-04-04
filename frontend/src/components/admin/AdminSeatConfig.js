@@ -1,6 +1,18 @@
 import React, { useState, useEffect, useRef } from "react";
 import api from "../../services/api";
 
+const THEME = {
+  panel: "#fcfbf8",
+  soft: "#f1eee8",
+  border: "#d8d2c9",
+  text: "#5f6768",
+  muted: "#8f9594",
+  primary: "#7f95a6",
+  success: "#8ca79a",
+  danger: "#b78a84",
+  accent: "#a996b0",
+};
+
 const normalizeMonitorVideoUrl = (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== "string") return "";
   const cleaned = rawUrl.trim().replace(/\\\\/g, "/");
@@ -267,12 +279,16 @@ const AdminSeatConfig = () => {
     }
     try {
       setBusyAction("confirming");
+      const cleanPreviewImageUrl = previewImageUrl
+        ? previewImageUrl.split("?")[0]
+        : "";
       const resp = await api.post("/confirm-seats", {
         area,
         prefix,
         seats,
         videoPath,
         frame,
+        previewImageUrl: cleanPreviewImageUrl,
         sourceVideo: lastSeatSourceVideo,
       });
       alert(resp.data?.message || "座位已确认并保存");
@@ -289,15 +305,15 @@ const AdminSeatConfig = () => {
       <h2>视频座位配置</h2>
       <div
         style={{
-          border: "1px solid #ddd",
+          border: `1px solid ${THEME.border}`,
           borderRadius: "8px",
           padding: "14px",
           marginBottom: "20px",
-          background: "#fafafa",
+          background: THEME.panel,
         }}
       >
         <h3 style={{ marginTop: 0 }}>视频座位配置（测试）</h3>
-        <p style={{ marginTop: 0, color: "#666" }}>
+        <p style={{ marginTop: 0, color: THEME.muted }}>
           先从视频识别座位，管理员确认或修改后，保存到 seats.json 和数据库。
         </p>
 
@@ -334,7 +350,7 @@ const AdminSeatConfig = () => {
           <button
             onClick={handleRunOccupationDetection}
             disabled={isBusy}
-            style={{ padding: "8px 12px", cursor: "pointer", background: "#6f42c1", color: "#fff", border: "none" }}
+            style={{ padding: "8px 12px", cursor: "pointer", background: THEME.accent, color: "#fff", border: "none" }}
           >
             {busyAction === "occupy-detect" ? "检测中..." : "运行占座检测并更新举报中心"}
           </button>
@@ -347,24 +363,24 @@ const AdminSeatConfig = () => {
           </button>
         </div>
 
-        <div style={{ marginBottom: "12px", padding: "10px", background: "#fff", border: "1px solid #e3e3e3", borderRadius: "6px" }}>
+        <div style={{ marginBottom: "12px", padding: "10px", background: "#fff", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
             <strong>占座检测结果</strong>
-            <span style={{ color: "#666", fontSize: "13px" }}>
+            <span style={{ color: THEME.muted, fontSize: "13px" }}>
               {latestOccupation?.detectedAt ? `检测时间：${new Date(latestOccupation.detectedAt).toLocaleString("zh-CN")}` : "暂无检测记录"}
             </span>
           </div>
-          <div style={{ marginTop: "6px", color: "#333", fontSize: "14px" }}>
+          <div style={{ marginTop: "6px", color: THEME.text, fontSize: "14px" }}>
             异常占座座位ID：
             {Array.isArray(latestOccupation?.occupiedSeatIds) && latestOccupation.occupiedSeatIds.length > 0
               ? latestOccupation.occupiedSeatIds.join(", ")
               : "无"}
           </div>
-          <div style={{ marginTop: "4px", color: "#666", fontSize: "13px" }}>
+          <div style={{ marginTop: "4px", color: THEME.muted, fontSize: "13px" }}>
             模型：人 {latestOccupation?.models?.person || "best.pt"}；物品 {latestOccupation?.models?.item || "yolov8n.pt"}
           </div>
           {latestOccupation?.videoMeta && (
-            <div style={{ marginTop: "4px", color: "#666", fontSize: "13px" }}>
+            <div style={{ marginTop: "4px", color: THEME.muted, fontSize: "13px" }}>
               视频信息：{latestOccupation.videoMeta.framesWritten || 0} 帧，
               {latestOccupation.videoMeta.fps || 0} FPS，
               时长约 {latestOccupation.videoMeta.durationSec || 0} 秒
@@ -373,7 +389,7 @@ const AdminSeatConfig = () => {
         </div>
 
         {generateTaskStatus && (
-          <div style={{ marginBottom: "10px", color: "#555" }}>{generateTaskStatus}</div>
+          <div style={{ marginBottom: "10px", color: THEME.text }}>{generateTaskStatus}</div>
         )}
 
         <div style={{ display: "flex", gap: "10px", marginBottom: "10px", flexWrap: "wrap" }}>
@@ -398,7 +414,7 @@ const AdminSeatConfig = () => {
           <button
             onClick={handleConfirmSeats}
             disabled={isBusy}
-            style={{ padding: "8px 12px", cursor: "pointer", background: "#28a745", color: "#fff", border: "none" }}
+            style={{ padding: "8px 12px", cursor: "pointer", background: THEME.success, color: "#fff", border: "none" }}
           >
             {busyAction === "confirming" ? "保存中..." : "3. 确认并生成 seats.json"}
           </button>
@@ -407,7 +423,7 @@ const AdminSeatConfig = () => {
         {previewImageUrl && (
           <div style={{ marginBottom: "12px" }}>
             <strong>识别预览图：</strong>
-            <div style={{ margin: "8px 0", color: "#666", fontSize: "13px" }}>
+            <div style={{ margin: "8px 0", color: THEME.muted, fontSize: "13px" }}>
               直接拖动红框可移动；拖右下角小方块可调整大小；删除不需要的框。
             </div>
             <div
@@ -420,7 +436,7 @@ const AdminSeatConfig = () => {
                 src={`http://localhost:5000${previewImageUrl}?t=${Date.now()}`}
                 alt="seats-preview"
                 onLoad={refreshImageMetrics}
-                style={{ maxWidth: "100%", border: "1px solid #ccc", borderRadius: "6px", marginTop: "8px", display: "block" }}
+                style={{ maxWidth: "100%", border: `1px solid ${THEME.border}`, borderRadius: "6px", marginTop: "8px", display: "block" }}
               />
               <div
                 style={{
@@ -450,7 +466,7 @@ const AdminSeatConfig = () => {
                         top,
                         width,
                         height,
-                        border: `2px solid ${isActive ? "#00a86b" : "#d62728"}`,
+                        border: `2px solid ${isActive ? "#8ca79a" : "#b78a84"}`,
                         background: "rgba(255, 0, 0, 0.06)",
                         boxSizing: "border-box",
                         pointerEvents: "auto",
@@ -462,7 +478,7 @@ const AdminSeatConfig = () => {
                           position: "absolute",
                           left: 2,
                           top: 2,
-                          background: isActive ? "#00a86b" : "#d62728",
+                          background: isActive ? "#8ca79a" : "#b78a84",
                           color: "#fff",
                           fontSize: "12px",
                           padding: "1px 5px",
@@ -480,7 +496,7 @@ const AdminSeatConfig = () => {
                           width: 10,
                           height: 10,
                           background: "#fff",
-                          border: `2px solid ${isActive ? "#00a86b" : "#d62728"}`,
+                          border: `2px solid ${isActive ? "#8ca79a" : "#b78a84"}`,
                           cursor: "nwse-resize",
                         }}
                       />
@@ -502,30 +518,30 @@ const AdminSeatConfig = () => {
                   autoPlay
                   muted
                   playsInline
-                  style={{ width: "100%", maxWidth: "900px", border: "1px solid #ccc", borderRadius: "6px" }}
+                  style={{ width: "100%", maxWidth: "900px", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}
                   onError={() => {
                     setMonitorVideoError("视频加载失败：资源可能尚未生成完成或路径不可访问，请点击“刷新最近检测结果”后重试。");
                   }}
                   src={/^https?:\/\//i.test(monitorVideoUrl) ? monitorVideoUrl : `http://localhost:5000${monitorVideoUrl}`}
                 />
                 {monitorVideoError && (
-                  <div style={{ marginTop: "8px", color: "#c62828", fontSize: "13px" }}>
+                  <div style={{ marginTop: "8px", color: THEME.danger, fontSize: "13px" }}>
                     {monitorVideoError}
                   </div>
                 )}
               </>
             ) : (
-              <div style={{ padding: "12px", border: "1px dashed #ccc", borderRadius: "6px", color: "#666" }}>
+              <div style={{ padding: "12px", border: `1px dashed ${THEME.border}`, borderRadius: "6px", color: THEME.muted }}>
                 暂无检测视频。请点击“运行占座检测并更新举报中心”。
               </div>
             )}
           </div>
         </div>
 
-        <div style={{ overflowX: "auto", background: "#fff", border: "1px solid #ddd", borderRadius: "6px" }}>
+        <div style={{ overflowX: "auto", background: "#fff", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr style={{ background: "#f4f4f4" }}>
+              <tr style={{ background: THEME.soft }}>
                 <th style={{ padding: "8px" }}>编号</th>
                 <th style={{ padding: "8px" }}>x1</th>
                 <th style={{ padding: "8px" }}>y1</th>
@@ -536,7 +552,7 @@ const AdminSeatConfig = () => {
             </thead>
             <tbody>
               {seats.map((seat, idx) => (
-                <tr key={`seat-${idx}`} style={{ borderTop: "1px solid #eee" }}>
+                <tr key={`seat-${idx}`} style={{ borderTop: `1px solid ${THEME.border}` }}>
                   <td style={{ padding: "8px" }}>{prefix}{idx + 1}</td>
                   {[0, 1, 2, 3].map((pos) => (
                     <td key={pos} style={{ padding: "8px" }}>
@@ -551,7 +567,7 @@ const AdminSeatConfig = () => {
                   <td style={{ padding: "8px" }}>
                     <button
                       onClick={() => removeSeat(idx)}
-                      style={{ padding: "6px 10px", background: "#dc3545", color: "#fff", border: "none", cursor: "pointer" }}
+                      style={{ padding: "6px 10px", background: THEME.danger, color: "#fff", border: "none", cursor: "pointer" }}
                     >
                       删除
                     </button>
@@ -560,7 +576,7 @@ const AdminSeatConfig = () => {
               ))}
               {seats.length === 0 && (
                 <tr>
-                  <td colSpan={6} style={{ padding: "10px", color: "#666" }}>
+                  <td colSpan={6} style={{ padding: "10px", color: THEME.muted }}>
                     还没有座位框，请先点击“识别座位”。
                   </td>
                 </tr>

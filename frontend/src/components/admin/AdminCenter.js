@@ -41,19 +41,21 @@ const AdminCenter = () => {
 
   const getStatusBadge = (status) => {
     const statusMap = {
-      pending: { bg: "#ffc107", text: "待审核" },
-      valid: { bg: "#28a745", text: "属实" },
-      invalid: { bg: "#dc3545", text: "驳回" },
+      pending: { bg: "#eee2d1", color: "#6f5740", border: "#c4ab87", text: "待审核" },
+      valid: { bg: "#e1ebe5", color: "#476457", border: "#8ca79a", text: "属实" },
+      invalid: { bg: "#f0e1df", color: "#7a4f4a", border: "#b78a84", text: "驳回" },
     };
     const s = statusMap[status] || statusMap.pending;
     return (
       <span
         style={{
           backgroundColor: s.bg,
-          color: "#fff",
+          color: s.color,
+          border: `1px solid ${s.border}`,
           padding: "4px 8px",
-          borderRadius: "4px",
+          borderRadius: "999px",
           fontSize: "12px",
+          fontWeight: 600,
         }}
       >
         {s.text}
@@ -62,10 +64,10 @@ const AdminCenter = () => {
   };
 
   if (loading) return <div>加载中...</div>;
-  if (error) return <div style={{ color: "red" }}>{error}</div>;
+  if (error) return <div style={{ color: "#b78a84" }}>{error}</div>;
 
   return (
-    <div>
+    <div style={{ background: "#fcfbf8", border: "1px solid #d8d2c9", borderRadius: "10px", padding: "14px" }}>
       <h2>举报中心</h2>
 
       <p>共 {reports.length} 条举报记录</p>
@@ -84,8 +86,8 @@ const AdminCenter = () => {
             <thead>
               <tr
                 style={{
-                  backgroundColor: "#f4f4f4",
-                  borderBottom: "2px solid #ddd",
+                  backgroundColor: "#f1eee8",
+                  borderBottom: "2px solid #d8d2c9",
                 }}
               >
                 <th style={{ padding: "10px", textAlign: "left" }}>举报ID</th>
@@ -103,7 +105,7 @@ const AdminCenter = () => {
               {reports.map((report) => (
                 <tr
                   key={report.report_id}
-                  style={{ borderBottom: "1px solid #ddd" }}
+                  style={{ borderBottom: "1px solid #d8d2c9" }}
                 >
                   <td style={{ padding: "10px" }}>{report.report_id}</td>
                   <td style={{ padding: "10px" }}>
@@ -143,7 +145,7 @@ const AdminCenter = () => {
                           }
                           style={{
                             padding: "4px 8px",
-                            backgroundColor: "#28a745",
+                            backgroundColor: "#8ca79a",
                             color: "#fff",
                             border: "none",
                             borderRadius: "4px",
@@ -162,7 +164,7 @@ const AdminCenter = () => {
                           }
                           style={{
                             padding: "4px 8px",
-                            backgroundColor: "#dc3545",
+                            backgroundColor: "#b78a84",
                             color: "#fff",
                             border: "none",
                             borderRadius: "4px",
@@ -174,7 +176,7 @@ const AdminCenter = () => {
                         </button>
                       </div>
                     ) : (
-                      <span style={{ color: "#999" }}>已处理</span>
+                      <span style={{ color: "#5f6768" }}>已处理</span>
                     )}
                   </td>
                   <td style={{ padding: "10px", fontSize: "12px" }}>

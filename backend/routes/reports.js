@@ -1,8 +1,50 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db");
+const {
+  syncAllUserStatusesByCredit,
+  syncUserStatusByCredit,
+} = require("../utils/creditPolicy");
 
 const router = express.Router();
+let reportedSeatStatusColumnReadyPromise = null;
+
+const ensureReportedSeatStatusColumn = async (connection) => {
+  if (!reportedSeatStatusColumnReadyPromise) {
+    reportedSeatStatusColumnReadyPromise = (async () => {
+      const [columns] = await connection.query(
+        "SHOW COLUMNS FROM reports LIKE 'reported_seat_status'",
+      );
+      if (columns.length === 0) {
+        await connection.query(
+          "ALTER TABLE reports ADD COLUMN reported_seat_status TINYINT NULL AFTER report_status",
+        );
+      }
+    })().catch((error) => {
+      reportedSeatStatusColumnReadyPromise = null;
+      throw error;
+    });
+  }
+
+  return reportedSeatStatusColumnReadyPromise;
+};
+
+const inferReportedSeatStatus = async (connection, seatId, reportCreatedAt) => {
+  const [reservationRows] = await connection.query(
+    `SELECT res_status
+     FROM reservations
+     WHERE seat_id = ?
+       AND created_at <= ?
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [seatId, reportCreatedAt],
+  );
+
+  const resStatus = reservationRows[0]?.res_status;
+  if (resStatus === "active") return 2;
+  if (resStatus === "pending") return 1;
+  return 0;
+};
 
 // 中间件：验证JWT token
 const authenticateToken = (req, res, next) => {
@@ -37,6 +79,7 @@ router.post("/", authenticateToken, async (req, res) => {
 
   try {
     const connection = await db;
+    await ensureReportedSeatStatusColumn(connection);
 
     const [seatRows] = await connection.query(
       "SELECT * FROM seats WHERE seat_id = ?",
@@ -47,9 +90,13 @@ router.post("/", authenticateToken, async (req, res) => {
       return res.status(404).json({ message: "座位不存在" });
     }
 
+    const reportedSeatStatus = Number.isInteger(Number(seatRows[0].status))
+      ? Number(seatRows[0].status)
+      : 0;
+
     const [result] = await connection.query(
-      "INSERT INTO reports (reporter_id, seat_id, description, evidence_img, report_status) VALUES (?, ?, ?, ?, 'pending')",
-      [reporterId, seatId, description || "", evidence_img || ""],
+      "INSERT INTO reports (reporter_id, seat_id, description, evidence_img, report_status, reported_seat_status) VALUES (?, ?, ?, ?, 'pending', ?)",
+      [reporterId, seatId, description || "", evidence_img || "", reportedSeatStatus],
     );
 
     // 将被举报座位标记为异常状态，便于管理员快速排查
@@ -94,8 +141,10 @@ router.get("/my-credit-stats", authenticateToken, async (req, res) => {
   try {
     const connection = await db;
 
+    await syncUserStatusByCredit(connection, userId);
+
     const [userRows] = await connection.query(
-      "SELECT user_id, username, credit_score FROM users WHERE user_id = ?",
+      "SELECT user_id, username, credit_score, status FROM users WHERE user_id = ?",
       [userId],
     );
 
@@ -223,10 +272,12 @@ router.get("/credit-stats", authenticateToken, async (req, res) => {
       FROM users`,
     );
 
-    const [users] = await connection.query(
+    await syncAllUserStatusesByCredit(connection);
+
+    const [syncedUsers] = await connection.query(
       `SELECT user_id, username, credit_score, status, role
-      FROM users
-      ORDER BY credit_score ASC, username ASC`,
+       FROM users
+       ORDER BY credit_score ASC, username ASC`,
     );
 
     res.json({
@@ -236,7 +287,7 @@ router.get("/credit-stats", authenticateToken, async (req, res) => {
         min_credit: 0,
         max_credit: 0,
       },
-      users,
+      users: syncedUsers,
     });
   } catch (error) {
     console.error("Fetch credit stats error:", error);
@@ -259,9 +310,10 @@ router.patch("/:reportId", authenticateToken, async (req, res) => {
 
   try {
     const connection = await db;
+    await ensureReportedSeatStatusColumn(connection);
 
     const [existingRows] = await connection.query(
-      "SELECT report_id, reporter_id, seat_id, report_status, created_at FROM reports WHERE report_id = ?",
+      "SELECT report_id, reporter_id, seat_id, report_status, created_at, reported_seat_status FROM reports WHERE report_id = ?",
       [reportId],
     );
 
@@ -296,6 +348,7 @@ router.patch("/:reportId", authenticateToken, async (req, res) => {
           "UPDATE users SET credit_score = GREATEST(0, credit_score - 5) WHERE user_id = ?",
           [targetRows[0].user_id],
         );
+        await syncUserStatusByCredit(connection, targetRows[0].user_id);
       }
     }
 
@@ -307,6 +360,21 @@ router.patch("/:reportId", authenticateToken, async (req, res) => {
       await connection.query(
         "UPDATE users SET credit_score = GREATEST(0, credit_score - 5) WHERE user_id = ?",
         [currentReport.reporter_id],
+      );
+      await syncUserStatusByCredit(connection, currentReport.reporter_id);
+
+      const snapshotStatus = Number(currentReport.reported_seat_status);
+      const restoredStatus = Number.isFinite(snapshotStatus)
+        ? snapshotStatus
+        : await inferReportedSeatStatus(
+            connection,
+            currentReport.seat_id,
+            currentReport.created_at,
+          );
+
+      await connection.query(
+        "UPDATE seats SET status = ? WHERE seat_id = ?",
+        [restoredStatus, currentReport.seat_id],
       );
     }
 

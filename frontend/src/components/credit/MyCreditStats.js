@@ -29,7 +29,7 @@ const MyCreditStats = () => {
   if (error) return <div>{error}</div>;
 
   return (
-    <div style={{ marginTop: "24px" }}>
+    <div style={{ marginTop: "24px", background: "#fcfbf8", border: "1px solid #d8d2c9", borderRadius: "10px", padding: "14px", color: "#454d4e" }}>
       <h3>我的信誉分统计</h3>
       <div
         style={{
@@ -42,7 +42,7 @@ const MyCreditStats = () => {
         <div
           style={{
             padding: "10px 12px",
-            background: "#f4f4f4",
+            background: "#f1eee8",
             borderRadius: "6px",
           }}
         >
@@ -51,7 +51,7 @@ const MyCreditStats = () => {
         <div
           style={{
             padding: "10px 12px",
-            background: "#f4f4f4",
+            background: "#f1eee8",
             borderRadius: "6px",
           }}
         >
@@ -60,7 +60,7 @@ const MyCreditStats = () => {
         <div
           style={{
             padding: "10px 12px",
-            background: "#f4f4f4",
+            background: "#f1eee8",
             borderRadius: "6px",
           }}
         >
@@ -69,11 +69,23 @@ const MyCreditStats = () => {
         <div
           style={{
             padding: "10px 12px",
-            background: "#f4f4f4",
+            background: "#f1eee8",
             borderRadius: "6px",
           }}
         >
           举报驳回次数：{summary?.invalidReportCount ?? 0}
+        </div>
+        <div
+          style={{
+            padding: "10px 12px",
+            background: profile?.status === "frozen" ? "#f0e1df" : "#e1ebe5",
+            borderRadius: "6px",
+            color: profile?.status === "frozen" ? "#7a4f4a" : "#476457",
+            border: `1px solid ${profile?.status === "frozen" ? "#b78a84" : "#8ca79a"}`,
+            fontWeight: 600,
+          }}
+        >
+          账号状态：{profile?.status === "frozen" ? "冻结" : "正常"}
         </div>
       </div>
 
@@ -86,8 +98,8 @@ const MyCreditStats = () => {
             <thead>
               <tr
                 style={{
-                  backgroundColor: "#f4f4f4",
-                  borderBottom: "2px solid #ddd",
+                  backgroundColor: "#f1eee8",
+                  borderBottom: "2px solid #d8d2c9",
                 }}
               >
                 <th style={{ padding: "10px", textAlign: "left" }}>时间</th>
@@ -97,8 +109,8 @@ const MyCreditStats = () => {
             </thead>
             <tbody>
               {records.map((record) => (
-                <tr key={record.id} style={{ borderBottom: "1px solid #ddd" }}>
-                  <td style={{ padding: "10px", fontSize: "12px" }}>
+                <tr key={record.id} style={{ borderBottom: "1px solid #d8d2c9" }}>
+                  <td style={{ padding: "10px", fontSize: "12px", color: "#5f6768" }}>
                     {record.eventTime
                       ? new Date(record.eventTime).toLocaleString("zh-CN")
                       : "未知"}
@@ -107,7 +119,7 @@ const MyCreditStats = () => {
                   <td
                     style={{
                       padding: "10px",
-                      color: record.scoreChange >= 0 ? "#28a745" : "#dc3545",
+                      color: record.scoreChange >= 0 ? "#8ca79a" : "#b78a84",
                       fontWeight: "bold",
                     }}
                   >
