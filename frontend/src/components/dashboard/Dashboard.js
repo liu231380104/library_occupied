@@ -6,6 +6,7 @@ import MyNotifications from "../notifications/MyNotifications";
 import MyCreditStats from "../credit/MyCreditStats";
 import AdminCenter from "../admin/AdminCenter";
 import AdminCreditStats from "../admin/AdminCreditStats";
+import AdminSeatConfig from "../admin/AdminSeatConfig";
 import api from "../../services/api";
 import { getCurrentUser, getUserRole } from "../../utils/tokenUtils";
 
@@ -13,6 +14,7 @@ const Dashboard = () => {
   const [role, setRole] = useState(null);
   const [username, setUsername] = useState("");
   const [activeTab, setActiveTab] = useState("seatMap");
+  const [keepAdminSeatConfigMounted, setKeepAdminSeatConfigMounted] = useState(false);
   const [floatingNotice, setFloatingNotice] = useState(null);
   const [dismissedNoticeIds, setDismissedNoticeIds] = useState(() => {
     try {
@@ -41,6 +43,12 @@ const Dashboard = () => {
     window.addEventListener("openAdminReports", openAdminReports);
     return () => window.removeEventListener("openAdminReports", openAdminReports);
   }, [role]);
+
+  useEffect(() => {
+    if (role === "admin" && activeTab === "adminSeatConfig") {
+      setKeepAdminSeatConfigMounted(true);
+    }
+  }, [role, activeTab]);
 
   useEffect(() => {
     if (role === "admin" || !role) {
@@ -232,6 +240,26 @@ const Dashboard = () => {
               </button>
             </li>
           )}
+          {role === "admin" && (
+            <li>
+              <button
+                onClick={() => setActiveTab("adminSeatConfig")}
+                style={{
+                  width: "100%",
+                  marginBottom: "8px",
+                  padding: "8px",
+                  backgroundColor:
+                    activeTab === "adminSeatConfig" ? "#007bff" : "#fff",
+                  color: activeTab === "adminSeatConfig" ? "#fff" : "#000",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                }}
+              >
+                视频座位配置
+              </button>
+            </li>
+          )}
         </ul>
         <div style={{ marginTop: "30px" }}>
           <button
@@ -267,6 +295,11 @@ const Dashboard = () => {
         {activeTab === "myReports" && <MyReports />}
         {activeTab === "adminReports" && <AdminCenter />}
         {activeTab === "adminCredit" && <AdminCreditStats />}
+        {role === "admin" && keepAdminSeatConfigMounted && (
+          <div style={{ display: activeTab === "adminSeatConfig" ? "block" : "none" }}>
+            <AdminSeatConfig />
+          </div>
+        )}
       </main>
 
       {role !== "admin" && floatingNotice && (

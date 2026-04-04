@@ -1,5 +1,5 @@
 {
-  "videoPath": "D:\\third_year_of_university\\v1.mp4",
+  "videoPath": "D:\\cP\\library_occupied\\v1.mp4",
   "frame": 0,
   "sourceVideo": {
     "fps": 24,
@@ -9,5 +9,5 @@
     "frameIndex": 0
   },
   "seatsCount": 23,
-  "savedAt": 1775025154388
+  "savedAt": 1775290129481
 }
