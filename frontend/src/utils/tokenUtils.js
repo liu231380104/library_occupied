@@ -11,12 +11,14 @@ export const parseToken = (token) => {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
 
-    // 解码 payload (第二部分)
-    const payload = parts[1];
-    // 添加 padding
-    const padded = payload + "==".substring(0, (4 - (payload.length % 4)) % 4);
-    // Base64 解码
-    const decoded = atob(padded);
+    // 解码 payload (第二部分，Base64URL + UTF-8)
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payload + "=".repeat((4 - (payload.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+    const decoded = typeof TextDecoder !== "undefined"
+      ? new TextDecoder("utf-8").decode(bytes)
+      : decodeURIComponent(Array.from(bytes).map((b) => `%${b.toString(16).padStart(2, "0")}`).join(""));
     // 解析 JSON
     const user = JSON.parse(decoded);
     return user;

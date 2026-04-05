@@ -41,6 +41,9 @@ const SeatMap = () => {
   const [violationSeat, setViolationSeat] = useState(null);
   const [violationDescription, setViolationDescription] = useState("");
   const [hoveredSeatId, setHoveredSeatId] = useState(null);
+  const [autoReserving, setAutoReserving] = useState(false);
+  const [autoReserveMode, setAutoReserveMode] = useState("balanced");
+  const [autoReserveHint, setAutoReserveHint] = useState("");
 
   useEffect(() => {
     // 从 token 解析 role
@@ -318,6 +321,33 @@ const SeatMap = () => {
     setSelectedSeat(null);
   };
 
+  const handleAutoReserve = async () => {
+    if (role === "admin") return;
+    setAutoReserveHint("");
+    setAutoReserving(true);
+    try {
+      const response = await api.post("/reservations/auto", {
+        area: selectedArea || undefined,
+        mode: autoReserveMode,
+      });
+      const picked = response?.data?.seat;
+      const strategyReasons = response?.data?.strategy?.reasons;
+      if (Array.isArray(strategyReasons) && strategyReasons.length > 0) {
+        setAutoReserveHint(`推荐理由：${strategyReasons.join("，")}`);
+      }
+      if (picked?.seat_number) {
+        alert(`一键预约成功：${picked.area}${picked.seat_number}（保留15分钟）`);
+      } else {
+        alert(response?.data?.message || "一键预约成功，系统将保留15分钟");
+      }
+      fetchSeats(selectedArea);
+    } catch (err) {
+      alert(err.response?.data?.message || "一键预约失败，请稍后重试");
+    } finally {
+      setAutoReserving(false);
+    }
+  };
+
   if (loading) return <div>加载中...</div>;
   if (error) return <div>{error}</div>;
 
@@ -354,6 +384,35 @@ const SeatMap = () => {
               ))
             )}
           </select>
+          {role !== "admin" && (
+            <>
+              <select
+                value={autoReserveMode}
+                onChange={(e) => setAutoReserveMode(e.target.value)}
+                style={{ padding: "6px 8px" }}
+                title="智能策略"
+              >
+                <option value="balanced">智能均衡</option>
+                <option value="quick">快速入座</option>
+                <option value="quiet">安静优先</option>
+              </select>
+              <button
+                onClick={handleAutoReserve}
+                disabled={autoReserving}
+                style={{
+                  padding: "6px 12px",
+                  backgroundColor: THEME.success,
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  cursor: autoReserving ? "not-allowed" : "pointer",
+                  opacity: autoReserving ? 0.8 : 1,
+                }}
+              >
+                {autoReserving ? "预约中..." : "一键智能预约"}
+              </button>
+            </>
+          )}
           {role === "admin" && (
             <>
               <button
@@ -390,6 +449,23 @@ const SeatMap = () => {
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "flex-start", gap: "18px", flexWrap: "wrap" }}>
+        {role !== "admin" && autoReserveHint && (
+          <div
+            style={{
+              width: "100%",
+              marginBottom: "8px",
+              padding: "8px 10px",
+              borderRadius: "8px",
+              border: `1px solid ${THEME.warning}`,
+              background: "#f3ece1",
+              color: "#6f5740",
+              fontSize: "13px",
+              fontWeight: 600,
+            }}
+          >
+            {autoReserveHint}
+          </div>
+        )}
         <div
           style={{
             display: "grid",

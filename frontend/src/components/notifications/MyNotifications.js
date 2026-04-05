@@ -5,6 +5,7 @@ const MyNotifications = () => {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [processingPromptId, setProcessingPromptId] = useState(null);
 
   const fetchNotifications = async () => {
     try {
@@ -40,6 +41,13 @@ const MyNotifications = () => {
   }, []);
 
   const getCardStyle = (type) => {
+    if (type === "question") {
+      return {
+        border: "1px solid #7f95a6",
+        backgroundColor: "#e7edf2",
+      };
+    }
+
     if (type === "danger") {
       return {
         border: "1px solid #b78a84",
@@ -51,6 +59,22 @@ const MyNotifications = () => {
       border: "1px solid #c4ab87",
       backgroundColor: "#f3ece1",
     };
+  };
+
+  const handlePresencePrompt = async (promptId, isSelf) => {
+    if (!promptId) return;
+    setProcessingPromptId(promptId);
+    try {
+      const response = await api.post(`/reservations/presence-prompts/${promptId}/respond`, {
+        isSelf,
+      });
+      alert(response.data?.message || "已提交确认");
+      await fetchNotifications();
+    } catch (err) {
+      alert(err.response?.data?.message || "提交确认失败");
+    } finally {
+      setProcessingPromptId(null);
+    }
   };
 
   if (loading) return <div>加载消息中...</div>;
@@ -78,6 +102,38 @@ const MyNotifications = () => {
                 {item.title}
               </div>
               <div style={{ marginBottom: "6px", color: "#454d4e" }}>{item.message}</div>
+              {item.type === "question" && item.action?.promptId && (
+                <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
+                  <button
+                    onClick={() => handlePresencePrompt(item.action.promptId, true)}
+                    disabled={processingPromptId === item.action.promptId}
+                    style={{
+                      padding: "6px 10px",
+                      backgroundColor: "#7f95a6",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "4px",
+                      cursor: processingPromptId === item.action.promptId ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    是本人入座
+                  </button>
+                  <button
+                    onClick={() => handlePresencePrompt(item.action.promptId, false)}
+                    disabled={processingPromptId === item.action.promptId}
+                    style={{
+                      padding: "6px 10px",
+                      backgroundColor: "#b78a84",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "4px",
+                      cursor: processingPromptId === item.action.promptId ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    不是我
+                  </button>
+                </div>
+              )}
               <div style={{ fontSize: "12px", color: "#646d6e" }}>
                 {item.createdAt
                   ? new Date(item.createdAt).toLocaleString("zh-CN")

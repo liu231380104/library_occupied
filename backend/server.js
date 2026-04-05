@@ -54,6 +54,62 @@ const ENABLE_OCCUPATION_CRON = String(process.env.ENABLE_OCCUPATION_CRON || "fal
 let detectionRunning = false;
 const seatGenerationTasks = new Map();
 let latestOccupationResult = null;
+let presencePromptFeatureAvailable = true;
+
+async function ensurePresencePromptTable() {
+  try {
+    const db = require("./config/db");
+    const conn = await db;
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS reservation_presence_prompts (
+        prompt_id INT AUTO_INCREMENT PRIMARY KEY,
+        reservation_id INT NOT NULL,
+        user_id VARCHAR(20) NOT NULL,
+        seat_id INT NOT NULL,
+        prompt_status ENUM('pending', 'confirmed', 'rejected', 'expired') DEFAULT 'pending',
+        detected_at DATETIME NOT NULL,
+        responded_at DATETIME DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_presence_user_status (user_id, prompt_status, created_at),
+        INDEX idx_presence_reservation (reservation_id, prompt_status),
+        FOREIGN KEY (reservation_id) REFERENCES reservations(reservation_id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+        FOREIGN KEY (seat_id) REFERENCES seats(seat_id) ON DELETE CASCADE
+      )
+    `);
+    console.log("reservation_presence_prompts table ready");
+  } catch (err) {
+    console.warn("Unable to ensure reservation_presence_prompts table:", err.message || err);
+  }
+}
+
+async function ensureNotificationHistoryTable() {
+  try {
+    const db = require("./config/db");
+    const conn = await db;
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS notification_history (
+        notification_id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id VARCHAR(20) NOT NULL,
+        event_type ENUM('info', 'success', 'warning', 'danger', 'question') NOT NULL DEFAULT 'info',
+        title VARCHAR(120) NOT NULL,
+        message TEXT NOT NULL,
+        source VARCHAR(60) NOT NULL,
+        source_key VARCHAR(120) NOT NULL,
+        payload_json TEXT DEFAULT NULL,
+        is_read TINYINT(1) NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_notification_source (user_id, source, source_key),
+        INDEX idx_notification_user_updated (user_id, updated_at),
+        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+      )
+    `);
+    console.log("notification_history table ready");
+  } catch (err) {
+    console.warn("Unable to ensure notification_history table:", err.message || err);
+  }
+}
 
 function loadSeatMeta() {
   try {
@@ -551,17 +607,86 @@ async function runSeatDetection({ videoPath, area = "A区", maxFrames = 300 }) {
     );
 
     for (const seatId of occupiedSeatIds) {
-      const [reservations] = await conn.query(
+      const [activeReservations] = await conn.query(
         "SELECT 1 FROM reservations WHERE seat_id = ? AND res_status = 'active' LIMIT 1",
         [seatId],
       );
-      if (reservations.length === 0) {
-        // 座位被占用但无活跃预约 -> 异常占座
-        await conn.query("UPDATE seats SET status = 3 WHERE seat_id = ?", [seatId]);
-      } else {
+
+      if (activeReservations.length > 0) {
         // 座位被占用且有活跃预约 -> 已占用
         await conn.query("UPDATE seats SET status = 2 WHERE seat_id = ?", [seatId]);
+        continue;
       }
+
+      const [pendingReservations] = await conn.query(
+        "SELECT reservation_id, user_id FROM reservations WHERE seat_id = ? AND res_status = 'pending' ORDER BY created_at DESC LIMIT 1",
+        [seatId],
+      );
+
+      if (pendingReservations.length > 0) {
+        // 有待签到预约时先保持“已预约”，并发起“是否本人入座”确认
+        await conn.query("UPDATE seats SET status = 1 WHERE seat_id = ?", [seatId]);
+
+        if (presencePromptFeatureAvailable) {
+          try {
+            const pending = pendingReservations[0];
+            const [existingPrompts] = await conn.query(
+              `SELECT prompt_id
+               FROM reservation_presence_prompts
+               WHERE reservation_id = ?
+                 AND prompt_status = 'pending'
+                 AND created_at >= DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+               LIMIT 1`,
+              [pending.reservation_id],
+            );
+
+            if (existingPrompts.length === 0) {
+              const [promptInsert] = await conn.query(
+                `INSERT INTO reservation_presence_prompts
+                   (reservation_id, user_id, seat_id, prompt_status, detected_at)
+                 VALUES (?, ?, ?, 'pending', NOW())`,
+                [pending.reservation_id, pending.user_id, seatId],
+              );
+
+              await conn.query(
+                `INSERT INTO notification_history
+                   (user_id, event_type, title, message, source, source_key, payload_json, is_read)
+                 VALUES (?, 'question', ?, ?, 'presence', ?, ?, 0)
+                 ON DUPLICATE KEY UPDATE
+                   event_type = VALUES(event_type),
+                   title = VALUES(title),
+                   message = VALUES(message),
+                   payload_json = VALUES(payload_json),
+                   is_read = 0,
+                   updated_at = CURRENT_TIMESTAMP`,
+                [
+                  pending.user_id,
+                  "检测到有人入座",
+                  `系统检测到你预约的座位 ${seatId} 已有人入座，是否为你本人？`,
+                  `presence-created-${pending.reservation_id}`,
+                  JSON.stringify({
+                    promptId: promptInsert.insertId,
+                    reservationId: pending.reservation_id,
+                    seatId,
+                    userId: pending.user_id,
+                  }),
+                ],
+              );
+            }
+          } catch (promptErr) {
+            if (promptErr?.code === "ER_NO_SUCH_TABLE") {
+              presencePromptFeatureAvailable = false;
+              console.warn("reservation_presence_prompts 表不存在，入座确认提示功能已暂时禁用。请执行对应迁移脚本。");
+            } else {
+              console.warn("创建入座确认提示失败:", promptErr.message || promptErr);
+            }
+          }
+        }
+        continue;
+      }
+
+      // 座位被占用且无活跃/待签到预约 -> 异常占座
+      await conn.query("UPDATE seats SET status = 3 WHERE seat_id = ?", [seatId]);
     }
 
     const payload = {
@@ -590,6 +715,10 @@ async function runSeatDetection({ videoPath, area = "A区", maxFrames = 300 }) {
 }
 
 // 启动服务器
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+(async () => {
+  await ensurePresencePromptTable();
+  await ensureNotificationHistoryTable();
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+})();

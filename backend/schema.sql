@@ -54,5 +54,40 @@ CREATE TABLE IF NOT EXISTS `reports` (
   FOREIGN KEY (`seat_id`) REFERENCES `seats`(`seat_id`)
 );
 
+-- 5. 入座确认提示表：用于“检测到有人入座，是否本人”交互
+CREATE TABLE IF NOT EXISTS `reservation_presence_prompts` (
+  `prompt_id` INT AUTO_INCREMENT PRIMARY KEY,
+  `reservation_id` INT NOT NULL,
+  `user_id` VARCHAR(20) NOT NULL,
+  `seat_id` INT NOT NULL,
+  `prompt_status` ENUM('pending', 'confirmed', 'rejected', 'expired') DEFAULT 'pending',
+  `detected_at` DATETIME NOT NULL,
+  `responded_at` DATETIME DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_presence_user_status` (`user_id`, `prompt_status`, `created_at`),
+  INDEX `idx_presence_reservation` (`reservation_id`, `prompt_status`),
+  FOREIGN KEY (`reservation_id`) REFERENCES `reservations`(`reservation_id`) ON DELETE CASCADE,
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`user_id`) ON DELETE CASCADE,
+  FOREIGN KEY (`seat_id`) REFERENCES `seats`(`seat_id`) ON DELETE CASCADE
+);
+
+-- 6. 消息历史表：保存用户可见的提醒、确认、签到等消息
+CREATE TABLE IF NOT EXISTS `notification_history` (
+  `notification_id` INT AUTO_INCREMENT PRIMARY KEY,
+  `user_id` VARCHAR(20) NOT NULL,
+  `event_type` ENUM('info', 'success', 'warning', 'danger', 'question') NOT NULL DEFAULT 'info',
+  `title` VARCHAR(120) NOT NULL,
+  `message` TEXT NOT NULL,
+  `source` VARCHAR(60) NOT NULL,
+  `source_key` VARCHAR(120) NOT NULL,
+  `payload_json` TEXT DEFAULT NULL,
+  `is_read` TINYINT(1) NOT NULL DEFAULT 0,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uniq_notification_source` (`user_id`, `source`, `source_key`),
+  INDEX `idx_notification_user_updated` (`user_id`, `updated_at`),
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`user_id`) ON DELETE CASCADE
+);
+
 -- 不再默认预置A区座位。
 -- 请通过管理员页面“视频座位配置（测试）”生成并确认后写入 seats 表。
