@@ -1,6 +1,8 @@
 // 预约/签到逻辑路由
 const express = require("express");
 const jwt = require("jsonwebtoken");
+const fs = require("fs");
+const path = require("path");
 const db = require("../config/db");
 const {
   getCreditReminder,
@@ -9,6 +11,7 @@ const {
 } = require("../utils/creditPolicy");
 
 const router = express.Router();
+const SEAT_META_PATH = path.join(__dirname, "..", "python_scripts", "seats_meta.json");
 
 const AUTO_MODES = new Set(["balanced", "quick", "quiet"]);
 
@@ -17,9 +20,63 @@ function normalizeAutoMode(rawMode) {
   return AUTO_MODES.has(mode) ? mode : "balanced";
 }
 
+function normalizeStrictQuiet(rawValue, mode) {
+  if (mode !== "quiet") return false;
+  if (rawValue === undefined || rawValue === null || rawValue === "") return true;
+  if (typeof rawValue === "boolean") return rawValue;
+  const normalized = String(rawValue).trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(normalized);
+}
+
 function extractSeatNumberWeight(seatNumber) {
   const num = Number(String(seatNumber || "").replace(/[^0-9]/g, ""));
   return Number.isFinite(num) && num > 0 ? num : 9999;
+}
+
+function parseSeatNumberParts(seatNumber) {
+  const raw = String(seatNumber || "").trim();
+  const match = raw.match(/^([^0-9]*)([0-9]+)$/);
+  if (!match) {
+    return {
+      prefix: raw,
+      number: extractSeatNumberWeight(raw),
+    };
+  }
+  return {
+    prefix: match[1] || "",
+    number: Number(match[2]) || extractSeatNumberWeight(raw),
+  };
+}
+
+function median(values) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid];
+  return (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function loadSeatMetaMappingBySeatId() {
+  try {
+    if (!fs.existsSync(SEAT_META_PATH)) return new Map();
+    const raw = fs.readFileSync(SEAT_META_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+    const mappings = Array.isArray(parsed?.seatMappings) ? parsed.seatMappings : [];
+
+    const mapping = new Map();
+    for (const item of mappings) {
+      const seatId = Number(item?.seatId);
+      const bbox = Array.isArray(item?.bbox) ? item.bbox.map((v) => Number(v)) : null;
+      if (!Number.isInteger(seatId) || !bbox || bbox.length !== 4 || !bbox.every(Number.isFinite)) {
+        continue;
+      }
+      mapping.set(seatId, bbox);
+    }
+
+    return mapping;
+  } catch (err) {
+    return new Map();
+  }
 }
 
 function clamp01(value) {
@@ -36,6 +93,7 @@ function scoreAutoCandidate(candidate, ctx) {
     maxPersonalUse,
     maxRisk,
     maxHot,
+    maxNearOccupied,
     minSeatNumber,
     maxSeatNumber,
   } = ctx;
@@ -43,6 +101,7 @@ function scoreAutoCandidate(candidate, ctx) {
   const personalUseNorm = clamp01(candidate.personalUse / Math.max(1, maxPersonalUse));
   const riskNorm = clamp01(candidate.risk / Math.max(1, maxRisk));
   const hotNorm = clamp01(candidate.hotness / Math.max(1, maxHot));
+  const nearOccupiedNorm = clamp01(candidate.nearOccupied / Math.max(1, maxNearOccupied));
   const seatRange = Math.max(1, maxSeatNumber - minSeatNumber);
   const quickNorm = clamp01((maxSeatNumber - candidate.seatNumberWeight) / seatRange);
   const areaHit = topPreferredArea && candidate.area === topPreferredArea ? 1 : 0;
@@ -53,6 +112,7 @@ function scoreAutoCandidate(candidate, ctx) {
     personalHabit: 0,
     riskAvoidance: 0,
     quietAvoidHot: 0,
+    quietAvoidNeighbors: 0,
     quickReachable: 0,
   };
 
@@ -62,9 +122,14 @@ function scoreAutoCandidate(candidate, ctx) {
     breakdown.areaPreference = areaHit * 12;
     breakdown.riskAvoidance = -riskNorm * 10;
     breakdown.quietAvoidHot = -hotNorm * 4;
+    breakdown.quietAvoidNeighbors = -nearOccupiedNorm * 6;
   } else if (mode === "quiet") {
     breakdown.riskAvoidance = -riskNorm * 24;
     breakdown.quietAvoidHot = -hotNorm * 20;
+    breakdown.quietAvoidNeighbors =
+      candidate.nearOccupied === 0 && candidate.nearTotal > 0
+        ? 22
+        : -nearOccupiedNorm * 32;
     breakdown.areaPreference = areaHit * 10;
     breakdown.personalHabit = personalUseNorm * 8;
     breakdown.quickReachable = quickNorm * 4;
@@ -74,6 +139,7 @@ function scoreAutoCandidate(candidate, ctx) {
     breakdown.personalHabit = personalUseNorm * 16;
     breakdown.riskAvoidance = -riskNorm * 18;
     breakdown.quietAvoidHot = -hotNorm * 8;
+    breakdown.quietAvoidNeighbors = -nearOccupiedNorm * 12;
     breakdown.quickReachable = quickNorm * 8;
   }
 
@@ -81,6 +147,7 @@ function scoreAutoCandidate(candidate, ctx) {
   score += breakdown.personalHabit;
   score += breakdown.riskAvoidance;
   score += breakdown.quietAvoidHot;
+  score += breakdown.quietAvoidNeighbors;
   score += breakdown.quickReachable;
 
   const reasons = [];
@@ -88,6 +155,9 @@ function scoreAutoCandidate(candidate, ctx) {
   if (personalUseNorm >= 0.6) reasons.push("与你历史使用习惯接近");
   if (riskNorm <= 0.2) reasons.push("近期被举报风险较低");
   if (mode === "quiet" && hotNorm <= 0.35) reasons.push("近期热度较低，更安静");
+  if (mode === "quiet" && candidate.nearOccupied === 0 && candidate.nearTotal > 0) {
+    reasons.push("周边邻座当前无人，占座干扰更少");
+  }
   if (mode === "quick" && quickNorm >= 0.6) reasons.push("优先推荐更易快速到达的座位");
   if (reasons.length === 0) reasons.push("综合当前空闲情况给出最优候选");
 
@@ -327,6 +397,10 @@ router.post("/auto", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const requestedArea = typeof req.body?.area === "string" ? req.body.area.trim() : "";
   const mode = normalizeAutoMode(req.body?.strategy?.mode || req.body?.mode);
+  const strictQuiet = normalizeStrictQuiet(
+    req.body?.strategy?.strictQuiet ?? req.body?.strictQuiet,
+    mode,
+  );
 
   try {
     const connection = await db;
@@ -432,19 +506,125 @@ router.post("/auto", authenticateToken, async (req, res) => {
       .map((row) => ({ area: String(row.area || ""), cnt: Number(row.cnt) || 0 }))
       .sort((a, b) => b.cnt - a.cnt)[0]?.area || "";
 
+    const seatMetaMapping = loadSeatMetaMappingBySeatId();
+
     const rawCandidates = availableSeatRows.map((seat) => ({
       seat_id: seat.seat_id,
       seat_number: seat.seat_number,
       area: seat.area,
       seatNumberWeight: extractSeatNumberWeight(seat.seat_number),
+      bbox: seatMetaMapping.get(Number(seat.seat_id)) || null,
+      nearOccupied: 0,
+      nearTotal: 0,
       personalUse: userSeatUseMap.get(Number(seat.seat_id)) || 0,
       risk: riskMap.get(Number(seat.seat_id)) || 0,
       hotness: hotMap.get(Number(seat.seat_id)) || 0,
     }));
 
+    const availableAreaSet = Array.from(new Set(availableSeatRows.map((row) => String(row.area || ""))));
+    const [areaSeatRows] = await connection.query(
+      `SELECT seat_id, seat_number, area, status
+       FROM seats
+       WHERE area IN (?)`,
+      [availableAreaSet],
+    );
+
+    const groupedByAreaPrefix = new Map();
+    for (const row of areaSeatRows || []) {
+      const area = String(row.area || "");
+      const { prefix, number } = parseSeatNumberParts(row.seat_number);
+      const key = `${area}::${prefix}`;
+      if (!groupedByAreaPrefix.has(key)) groupedByAreaPrefix.set(key, []);
+      groupedByAreaPrefix.get(key).push({
+        seatId: Number(row.seat_id),
+        number,
+        status: Number(row.status) || 0,
+      });
+    }
+
+    for (const list of groupedByAreaPrefix.values()) {
+      list.sort((a, b) => a.number - b.number);
+    }
+
+    const occupancyBySeatId = new Map(
+      (areaSeatRows || []).map((row) => [Number(row.seat_id), Number(row.status) || 0]),
+    );
+
+    const geoRows = rawCandidates
+      .filter((item) => Array.isArray(item.bbox) && item.bbox.length === 4)
+      .map((item) => {
+        const [x1, y1, x2, y2] = item.bbox;
+        const w = Math.max(1, x2 - x1);
+        const h = Math.max(1, y2 - y1);
+        return {
+          seatId: Number(item.seat_id),
+          area: String(item.area || ""),
+          centerX: (x1 + x2) / 2,
+          centerY: (y1 + y2) / 2,
+          diag: Math.hypot(w, h),
+        };
+      });
+
+    const geoBySeatId = new Map(geoRows.map((item) => [item.seatId, item]));
+    const areaDiagMedian = new Map(
+      availableAreaSet.map((area) => {
+        const diags = geoRows.filter((item) => item.area === area).map((item) => item.diag);
+        return [area, median(diags) || 120];
+      }),
+    );
+
+    for (const candidate of rawCandidates) {
+      let neighbors = [];
+      const candidateGeo = geoBySeatId.get(Number(candidate.seat_id));
+
+      if (candidateGeo) {
+        const isStrictQuietMode = mode === "quiet" && strictQuiet;
+        const threshold = (areaDiagMedian.get(String(candidate.area || "")) || 120)
+          * (isStrictQuietMode ? 4.0 : 2.2);
+        const sameArea = geoRows.filter(
+          (item) => item.area === String(candidate.area || "") && item.seatId !== Number(candidate.seat_id),
+        );
+
+        const nearestSorted = sameArea
+          .map((item) => ({
+            seatId: item.seatId,
+            distance: Math.hypot(item.centerX - candidateGeo.centerX, item.centerY - candidateGeo.centerY),
+          }))
+          .sort((a, b) => a.distance - b.distance);
+
+        const nearby = nearestSorted
+          .filter((item) => item.distance <= threshold)
+          .sort((a, b) => a.distance - b.distance);
+
+        const nearestFallback = nearestSorted.slice(0, isStrictQuietMode ? 12 : 6);
+
+        const merged = [...nearby, ...nearestFallback];
+        neighbors = Array.from(new Set(merged.map((item) => item.seatId)));
+      } else {
+        const { prefix, number: candidateNumber } = parseSeatNumberParts(candidate.seat_number);
+        const key = `${String(candidate.area || "")}::${prefix}`;
+        const group = groupedByAreaPrefix.get(key) || [];
+        if (!Number.isFinite(candidateNumber)) continue;
+
+        neighbors = group
+          .filter((item) => item.seatId !== Number(candidate.seat_id))
+          .filter((item) => Math.abs((Number(item.number) || 0) - candidateNumber) <= (mode === "quiet" && strictQuiet ? 6 : 2))
+          .map((item) => item.seatId);
+      }
+
+      const nearOccupied = neighbors.reduce((acc, seatId) => {
+        const st = occupancyBySeatId.get(Number(seatId)) || 0;
+        return st === 0 ? acc : acc + 1;
+      }, 0);
+
+      candidate.nearOccupied = nearOccupied;
+      candidate.nearTotal = neighbors.length;
+    }
+
     const maxPersonalUse = Math.max(1, ...rawCandidates.map((item) => item.personalUse));
     const maxRisk = Math.max(1, ...rawCandidates.map((item) => item.risk));
     const maxHot = Math.max(1, ...rawCandidates.map((item) => item.hotness));
+    const maxNearOccupied = Math.max(1, ...rawCandidates.map((item) => item.nearOccupied));
     const minSeatNumber = Math.min(...rawCandidates.map((item) => item.seatNumberWeight));
     const maxSeatNumber = Math.max(...rawCandidates.map((item) => item.seatNumberWeight));
 
@@ -455,16 +635,33 @@ router.post("/auto", authenticateToken, async (req, res) => {
         maxPersonalUse,
         maxRisk,
         maxHot,
+        maxNearOccupied,
         minSeatNumber,
         maxSeatNumber,
       }))
       .sort((a, b) => b.score - a.score);
 
+    const strictQuietCandidates = scoredCandidates.filter(
+      (item) => item.nearTotal > 0 && item.nearOccupied === 0,
+    );
+
+    if (mode === "quiet" && strictQuiet && strictQuietCandidates.length === 0) {
+      return res.status(404).json({
+        message: requestedArea
+          ? `区域 ${requestedArea} 暂无“四周无人”的安静座位，请稍后重试或关闭严格安静`
+          : "当前暂无“四周无人”的安静座位，请稍后重试或关闭严格安静",
+      });
+    }
+
+    const rankedCandidates = mode === "quiet"
+      ? (strictQuietCandidates.length > 0 ? strictQuietCandidates : scoredCandidates)
+      : scoredCandidates;
+
     const tx = await connection.getConnection();
     try {
       await tx.beginTransaction();
 
-      const topCandidates = scoredCandidates.slice(0, 10);
+      const topCandidates = rankedCandidates.slice(0, 10);
       const topCandidateIds = topCandidates.map((item) => item.seat_id);
       const [lockRows] = await tx.query(
         `SELECT seat_id, seat_number, area
@@ -523,6 +720,8 @@ router.post("/auto", authenticateToken, async (req, res) => {
         reservationId: result.insertId,
         strategy: {
           mode,
+          strictQuiet,
+          strictQuietMatched: mode === "quiet" ? pickedScored.nearOccupied === 0 && pickedScored.nearTotal > 0 : false,
           considered: scoredCandidates.length,
           reasons: pickedScored.reasons,
           score: pickedScored.score,

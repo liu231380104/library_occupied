@@ -1,0 +1,11 @@
+name: New Environment
+values:
+  - key: Initial value
+    value: ''
+    enabled: true
+  - key: Current value
+    value: ''
+    enabled: true
+  - key: Variable
+    value: ''
+    enabled: true

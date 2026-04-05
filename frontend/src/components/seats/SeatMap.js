@@ -41,8 +41,10 @@ const SeatMap = () => {
   const [violationSeat, setViolationSeat] = useState(null);
   const [violationDescription, setViolationDescription] = useState("");
   const [hoveredSeatId, setHoveredSeatId] = useState(null);
+  const [focusedSeatId, setFocusedSeatId] = useState(null);
   const [autoReserving, setAutoReserving] = useState(false);
   const [autoReserveMode, setAutoReserveMode] = useState("balanced");
+  const [strictQuietMode, setStrictQuietMode] = useState(true);
   const [autoReserveHint, setAutoReserveHint] = useState("");
 
   useEffect(() => {
@@ -168,6 +170,9 @@ const SeatMap = () => {
     const bNum = Number(String(b?.seat_number || "").replace(/\D/g, "")) || Number(b?.seat_id) || 0;
     return aNum - bNum;
   });
+
+  const freeSeats = orderedSeats.filter((seat) => Number(seat?.status) === 0);
+  const highlightedSeatId = hoveredSeatId ?? focusedSeatId;
 
   const handleSeatClick = (seat) => {
     // 管理员可以编辑座位状态
@@ -329,6 +334,7 @@ const SeatMap = () => {
       const response = await api.post("/reservations/auto", {
         area: selectedArea || undefined,
         mode: autoReserveMode,
+        strictQuiet: autoReserveMode === "quiet" ? strictQuietMode : false,
       });
       const picked = response?.data?.seat;
       const strategyReasons = response?.data?.strategy?.reasons;
@@ -396,6 +402,25 @@ const SeatMap = () => {
                 <option value="quick">快速入座</option>
                 <option value="quiet">安静优先</option>
               </select>
+              {autoReserveMode === "quiet" && (
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    fontSize: "13px",
+                    color: THEME.mutedText,
+                  }}
+                  title="开启后仅预约四周邻座无人的安静位置，否则直接返回无可用安静座位"
+                >
+                  <input
+                    type="checkbox"
+                    checked={strictQuietMode}
+                    onChange={(e) => setStrictQuietMode(e.target.checked)}
+                  />
+                  严格安静
+                </label>
+              )}
               <button
                 onClick={handleAutoReserve}
                 disabled={autoReserving}
@@ -477,11 +502,14 @@ const SeatMap = () => {
           {orderedSeats.map((seat) => (
             <div
               key={seat.seat_id}
+              data-seat-id={seat.seat_id}
               style={{
                 width: "100px",
                 height: "100px",
                 backgroundColor: getSeatColor(seat.status),
-                border: `2px solid ${THEME.border}`,
+                border: highlightedSeatId === seat.seat_id
+                  ? `2px solid ${THEME.warning}`
+                  : `2px solid ${THEME.border}`,
                 borderRadius: "5px",
                 display: "flex",
                 flexDirection: "column",
@@ -489,6 +517,7 @@ const SeatMap = () => {
                 justifyContent: "center",
                 cursor: role === "admin" || seat.status === 0 ? "pointer" : "not-allowed",
                 color: getSeatTextColor(seat.status),
+                boxShadow: highlightedSeatId === seat.seat_id ? "0 0 0 3px rgba(196, 171, 135, 0.25)" : "none",
               }}
               onClick={() => handleSeatClick(seat)}
               onMouseEnter={() => setHoveredSeatId(seat.seat_id)}
@@ -529,83 +558,135 @@ const SeatMap = () => {
 
         <div style={{ minWidth: "520px", flex: "1 1 520px" }}>
           <h3 style={{ marginTop: 0, marginBottom: "8px" }}>座位图</h3>
-          {seatMapPreviewUrl ? (
-            <div
-              style={{
-                position: "relative",
-                width: `${seatMapDisplayWidth}px`,
-                height: `${seatMapDisplayHeight}px`,
-                maxWidth: "100%",
-                border: `1px solid ${THEME.border}`,
-                borderRadius: "8px",
-                overflow: "hidden",
-                background: "#5f6768",
-              }}
-            >
-              <img
-                src={seatMapPreviewUrl}
-                alt="seat-map-preview"
-                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-              />
-              {seats.map((seat) => {
-                const bbox = Array.isArray(seat?.seat_bbox) ? seat.seat_bbox : null;
-                if (!bbox || bbox.length !== 4) return null;
+          <div style={{ display: "flex", gap: "12px", alignItems: "stretch", flexWrap: "nowrap" }}>
+            {seatMapPreviewUrl ? (
+              <div
+                style={{
+                  position: "relative",
+                  width: `${seatMapDisplayWidth}px`,
+                  height: `${seatMapDisplayHeight}px`,
+                  maxWidth: "100%",
+                  border: `1px solid ${THEME.border}`,
+                  borderRadius: "8px",
+                  overflow: "hidden",
+                  background: "#5f6768",
+                  flex: "0 0 auto",
+                }}
+              >
+                <img
+                  src={seatMapPreviewUrl}
+                  alt="seat-map-preview"
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                />
+                {seats.map((seat) => {
+                  const bbox = Array.isArray(seat?.seat_bbox) ? seat.seat_bbox : null;
+                  if (!bbox || bbox.length !== 4) return null;
 
-                const [x1, y1, x2, y2] = bbox.map((v) => Number(v));
-                if (![x1, y1, x2, y2].every(Number.isFinite) || x2 <= x1 || y2 <= y1) {
-                  return null;
-                }
+                  const [x1, y1, x2, y2] = bbox.map((v) => Number(v));
+                  if (![x1, y1, x2, y2].every(Number.isFinite) || x2 <= x1 || y2 <= y1) {
+                    return null;
+                  }
 
-                const sx = seatMapDisplayWidth / Math.max(seatMapNaturalWidth, 1);
-                const sy = seatMapDisplayHeight / Math.max(seatMapNaturalHeight, 1);
-                const isHover = hoveredSeatId === seat.seat_id;
+                  const sx = seatMapDisplayWidth / Math.max(seatMapNaturalWidth, 1);
+                  const sy = seatMapDisplayHeight / Math.max(seatMapNaturalHeight, 1);
+                  const isHighlight = highlightedSeatId === seat.seat_id;
 
-                return (
-                  <div
-                    key={`map-box-${seat.seat_id}`}
-                    style={{
-                      position: "absolute",
-                      left: `${x1 * sx}px`,
-                      top: `${y1 * sy}px`,
-                      width: `${Math.max(8, (x2 - x1) * sx)}px`,
-                      height: `${Math.max(8, (y2 - y1) * sy)}px`,
-                      border: isHover ? `2px solid ${THEME.warning}` : "1px solid rgba(255,255,255,0.55)",
-                      background: isHover ? "rgba(196, 171, 135, 0.26)" : "rgba(255,255,255,0.08)",
-                      boxSizing: "border-box",
-                      pointerEvents: "none",
-                    }}
-                  >
-                    <span
+                  return (
+                    <div
+                      key={`map-box-${seat.seat_id}`}
                       style={{
                         position: "absolute",
-                        left: 0,
-                        top: 0,
-                        fontSize: "10px",
-                        color: "#fff",
-                        background: isHover ? "#8f7a5f" : "rgba(0,0,0,0.45)",
-                        padding: "1px 3px",
+                        left: `${x1 * sx}px`,
+                        top: `${y1 * sy}px`,
+                        width: `${Math.max(8, (x2 - x1) * sx)}px`,
+                        height: `${Math.max(8, (y2 - y1) * sy)}px`,
+                        border: isHighlight ? `2px solid ${THEME.warning}` : "1px solid rgba(255,255,255,0.55)",
+                        background: isHighlight ? "rgba(196, 171, 135, 0.26)" : "rgba(255,255,255,0.08)",
+                        boxSizing: "border-box",
+                        pointerEvents: "none",
                       }}
                     >
-                      {seat.seat_number}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: 0,
+                          top: 0,
+                          fontSize: "10px",
+                          color: "#fff",
+                          background: isHighlight ? "#8f7a5f" : "rgba(0,0,0,0.45)",
+                          padding: "1px 3px",
+                        }}
+                      >
+                        {seat.seat_number}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div
+                style={{
+                  width: `${seatMapDisplayWidth}px`,
+                  maxWidth: "100%",
+                  border: `1px dashed ${THEME.border}`,
+                  borderRadius: "8px",
+                  padding: "18px",
+                  color: THEME.mutedText,
+                }}
+              >
+                暂无座位图。请先到“视频座位配置”页面识别并确认座位。
+              </div>
+            )}
+
             <div
               style={{
-                width: `${seatMapDisplayWidth}px`,
-                maxWidth: "100%",
-                border: `1px dashed ${THEME.border}`,
+                width: "180px",
+                minWidth: "180px",
+                border: `1px solid ${THEME.border}`,
                 borderRadius: "8px",
-                padding: "18px",
-                color: THEME.mutedText,
+                background: THEME.panelBg,
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
               }}
             >
-              暂无座位图。请先到“视频座位配置”页面识别并确认座位。
+              <div style={{ padding: "10px", borderBottom: `1px solid ${THEME.border}`, fontWeight: 700 }}>
+                空闲座位序号
+              </div>
+              <div style={{ maxHeight: `${seatMapDisplayHeight}px`, overflowY: "auto", padding: "8px" }}>
+                {freeSeats.length === 0 ? (
+                  <div style={{ color: THEME.mutedText, fontSize: "13px", padding: "6px 4px" }}>暂无空闲座位</div>
+                ) : (
+                  freeSeats.map((seat) => {
+                    const isHighlight = highlightedSeatId === seat.seat_id;
+                    return (
+                      <button
+                        key={`free-seat-${seat.seat_id}`}
+                        onClick={() => setFocusedSeatId(seat.seat_id)}
+                        onMouseEnter={() => setHoveredSeatId(seat.seat_id)}
+                        onMouseLeave={() => setHoveredSeatId(null)}
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "7px 9px",
+                          marginBottom: "6px",
+                          borderRadius: "6px",
+                          border: `1px solid ${isHighlight ? THEME.warning : THEME.border}`,
+                          background: isHighlight ? "#f3ece1" : "#fff",
+                          color: isHighlight ? "#6f5740" : THEME.text,
+                          cursor: "pointer",
+                          fontWeight: isHighlight ? 700 : 500,
+                        }}
+                        title={`高亮 ${seat.seat_number}`}
+                      >
+                        {seat.seat_number}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             </div>
-          )}
+          </div>
         </div>
       </div>
 

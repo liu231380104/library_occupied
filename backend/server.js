@@ -27,6 +27,20 @@ function parseJsonLines(lines) {
 // 中间件
 app.use(cors());
 app.use(express.json());
+
+// 兼容请求URL误带尾部空格（例如 /api/model/occupation-detect%20）
+app.use((req, res, next) => {
+  const normalizedUrl = String(req.url || "")
+    .replace(/(?:%20)+$/gi, "")
+    .replace(/\s+$/g, "");
+
+  if (normalizedUrl !== req.url) {
+    return res.redirect(307, normalizedUrl);
+  }
+
+  return next();
+});
+
 app.use("/python-assets", express.static(path.join(__dirname, "python_scripts")));
 
 // 路由
@@ -55,6 +69,22 @@ let detectionRunning = false;
 const seatGenerationTasks = new Map();
 let latestOccupationResult = null;
 let presencePromptFeatureAvailable = true;
+
+async function resolveSeatBaselineStatus(conn, seatId) {
+  const [activeRows] = await conn.query(
+    "SELECT 1 FROM reservations WHERE seat_id = ? AND res_status = 'active' LIMIT 1",
+    [seatId],
+  );
+  if (activeRows.length > 0) return 2;
+
+  const [pendingRows] = await conn.query(
+    "SELECT 1 FROM reservations WHERE seat_id = ? AND res_status = 'pending' LIMIT 1",
+    [seatId],
+  );
+  if (pendingRows.length > 0) return 1;
+
+  return 0;
+}
 
 async function ensurePresencePromptTable() {
   try {
@@ -255,6 +285,74 @@ function runGenerateSeats(videoPath, frame, outImage = "results/annotated_seats.
   });
 }
 
+function apiSuccess(res, data, message = "ok", status = 200) {
+  return res.status(status).json({
+    code: 0,
+    message,
+    data,
+  });
+}
+
+function apiFailure(res, error, status = 500) {
+  const normalized = typeof error === "string" ? { error } : (error || {});
+  return res.status(status).json({
+    code: status,
+    message: normalized.error || normalized.message || "请求失败",
+    error: normalized,
+  });
+}
+
+// 模型服务健康检查（用于部署验证 / Postman 冒烟测试）
+app.get("/api/model/health", (req, res) => {
+  const modelPaths = {
+    seat: SEAT_DETECT_MODEL,
+    person: PERSON_DETECT_MODEL,
+    item: ITEM_DETECT_MODEL,
+  };
+
+  const checks = Object.fromEntries(
+    Object.entries(modelPaths).map(([name, p]) => [name, {
+      path: String(p || "").replace(/\\/g, "/"),
+      exists: fs.existsSync(p),
+    }]),
+  );
+
+  return apiSuccess(res, {
+    service: "library-model-api",
+    pythonExecutable: PYTHON_EXECUTABLE,
+    models: checks,
+  }, "model api healthy");
+});
+
+// 标准化模型推理接口：座位识别
+app.post("/api/model/seat-detect", async (req, res) => {
+  const videoPath = req.body?.videoPath || DEFAULT_TEST_VIDEO;
+  const frame = Number.isFinite(Number(req.body?.frame)) ? Number(req.body.frame) : 0;
+
+  try {
+    const result = await runGenerateSeats(videoPath, frame);
+    return apiSuccess(res, result, "seat detection succeeded");
+  } catch (e) {
+    console.error("模型接口座位识别失败:", e);
+    return apiFailure(res, e, 500);
+  }
+});
+
+// 标准化模型推理接口：占座识别
+app.post("/api/model/occupation-detect", async (req, res) => {
+  const videoPath = req.body?.videoPath || DEFAULT_TEST_VIDEO;
+  const area = req.body?.area || "A区";
+  const maxFrames = Number(req.body?.maxFrames) || 300;
+
+  try {
+    const result = await runSeatDetection({ videoPath, area, maxFrames });
+    return apiSuccess(res, result, "occupation detection succeeded");
+  } catch (e) {
+    console.error("模型接口占座识别失败:", e);
+    return apiFailure(res, e, 500);
+  }
+});
+
 // 生成座位预览（管理员审核）
 app.post("/api/generate-seats", async (req, res) => {
   const videoPath = req.body?.videoPath || DEFAULT_TEST_VIDEO;
@@ -381,24 +479,34 @@ app.post("/api/confirm-seats", async (req, res) => {
 
     // 同步数据库座位表：按 seat_number 更新/新增，避免删除导致 reservations 级联丢失
     const generatedSeatNumbers = normalizedSeats.map((_, idx) => `${prefix}${idx + 1}`);
+    const seatMappings = [];
 
-    for (const seatNumber of generatedSeatNumbers) {
+    for (let idx = 0; idx < generatedSeatNumbers.length; idx += 1) {
+      const seatNumber = generatedSeatNumbers[idx];
+      const bbox = normalizedSeats[idx];
       const [existRows] = await conn.query(
         "SELECT seat_id FROM seats WHERE seat_number = ? LIMIT 1",
         [seatNumber],
       );
 
       if (existRows.length > 0) {
-        // 保留原 seat_id 和历史预约，仅刷新区域与时间戳
+        const seatId = Number(existRows[0].seat_id);
+        // 保留原 seat_id 和历史预约，刷新区域并按预约状态重置座位状态
+        const baselineStatus = await resolveSeatBaselineStatus(conn, seatId);
         await conn.query(
-          "UPDATE seats SET area = ?, last_updated = NOW() WHERE seat_number = ?",
-          [area, seatNumber],
+          "UPDATE seats SET area = ?, status = ? WHERE seat_number = ?",
+          [area, baselineStatus, seatNumber],
         );
+        seatMappings.push({ seatId, seatNumber, area, bbox });
       } else {
-        await conn.query(
+        const [insertResult] = await conn.query(
           "INSERT INTO seats (seat_number, area, status) VALUES (?, ?, 0)",
           [seatNumber, area],
         );
+        const seatId = Number(insertResult?.insertId);
+        if (Number.isInteger(seatId) && seatId > 0) {
+          seatMappings.push({ seatId, seatNumber, area, bbox });
+        }
       }
     }
 
@@ -412,6 +520,24 @@ app.post("/api/confirm-seats", async (req, res) => {
            AND seat_id NOT IN (SELECT DISTINCT seat_id FROM reservations)`,
         [area, ...generatedSeatNumbers],
       );
+    }
+
+    saveSeatMeta({
+      videoPath: confirmedVideoPath || DEFAULT_TEST_VIDEO,
+      frame: confirmedFrame,
+      area,
+      prefix,
+      seats: normalizedSeats,
+      previewImageUrl: previewImageUrl || "/python-assets/results/annotated_seats.jpg",
+      sourceVideo,
+      seatsCount: normalizedSeats.length,
+      seatMappings,
+      savedAt: Date.now(),
+    });
+
+    // 重新标定后，清除该区域上一次检测缓存，避免前端误显示旧异常结果
+    if (latestOccupationResult?.area === area) {
+      latestOccupationResult = null;
     }
 
     res.json({

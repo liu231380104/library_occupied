@@ -13,6 +13,8 @@ const THEME = {
   accent: "#a996b0",
 };
 
+const PREVIEW_MEDIA_MAX_WIDTH = 1200;
+
 const normalizeMonitorVideoUrl = (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== "string") return "";
   const cleaned = rawUrl.trim().replace(/\\\\/g, "/");
@@ -42,6 +44,7 @@ const AdminSeatConfig = () => {
   const [generateTaskStatus, setGenerateTaskStatus] = useState("");
   const [lastSeatSourceVideo, setLastSeatSourceVideo] = useState(null);
   const [activeSeatIndex, setActiveSeatIndex] = useState(-1);
+  const [seatSearch, setSeatSearch] = useState("");
   const [dragging, setDragging] = useState(null);
   const [imgMetrics, setImgMetrics] = useState({
     naturalW: 1,
@@ -50,6 +53,7 @@ const AdminSeatConfig = () => {
     displayH: 1,
   });
   const imgRef = useRef(null);
+  const previewPanelRef = useRef(null);
 
   useEffect(() => {
     fetchLatestOccupationResult();
@@ -182,33 +186,6 @@ const AdminSeatConfig = () => {
     }
   };
 
-  const handleGenerateMonitorVideo = async () => {
-    try {
-      setBusyAction("monitoring");
-      const resp = await api.post(
-        "/monitor-video",
-        { videoPath },
-        { timeout: 300000 },
-      );
-      const normalized = normalizeMonitorVideoUrl(resp.data?.videoUrl || "");
-      setMonitorVideoUrl(normalized);
-      if (normalized) {
-        sessionStorage.setItem("latestOccupationVideoUrl", normalized);
-        setMonitorVideoError("");
-      }
-      alert("监控视频已生成，可在页面直接播放");
-    } catch (err) {
-      console.error("Generate monitor video error:", err);
-      if (err.code === "ECONNABORTED") {
-        alert("监控视频生成超时，请缩短视频长度或稍后重试");
-        return;
-      }
-      alert(err.response?.data?.error || "监控视频生成失败");
-    } finally {
-      setBusyAction("");
-    }
-  };
-
   const updateSeatValue = (idx, pos, value) => {
     const next = seats.map((seat, i) => {
       if (i !== idx) return seat;
@@ -300,6 +277,18 @@ const AdminSeatConfig = () => {
     }
   };
 
+  const selectSeatAndFocus = (idx) => {
+    setActiveSeatIndex(idx);
+    if (previewPanelRef.current) {
+      previewPanelRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  };
+
+  const normalizedSeatSearch = seatSearch.trim().toLowerCase();
+  const filteredSeatRows = seats
+    .map((seat, idx) => ({ seat, idx, label: `${prefix}${idx + 1}` }))
+    .filter((item) => item.label.toLowerCase().includes(normalizedSeatSearch));
+
   return (
     <div>
       <h2>视频座位配置</h2>
@@ -339,13 +328,6 @@ const AdminSeatConfig = () => {
             style={{ padding: "8px 12px", cursor: "pointer" }}
           >
             {busyAction === "generating" ? "识别中..." : "1. 识别座位"}
-          </button>
-          <button
-            onClick={handleGenerateMonitorVideo}
-            disabled={isBusy}
-            style={{ padding: "8px 12px", cursor: "pointer" }}
-          >
-            {busyAction === "monitoring" ? "生成中..." : "2. 生成监控视频"}
           </button>
           <button
             onClick={handleRunOccupationDetection}
@@ -421,88 +403,236 @@ const AdminSeatConfig = () => {
         </div>
 
         {previewImageUrl && (
-          <div style={{ marginBottom: "12px" }}>
-            <strong>识别预览图：</strong>
-            <div style={{ margin: "8px 0", color: THEME.muted, fontSize: "13px" }}>
-              直接拖动红框可移动；拖右下角小方块可调整大小；删除不需要的框。
-            </div>
+          <div
+            style={{
+              marginBottom: "12px",
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: "12px",
+              alignItems: "stretch",
+              width: "100%",
+              maxWidth: `calc(${PREVIEW_MEDIA_MAX_WIDTH}px * 2 + 12px)`,
+              margin: "0 auto",
+            }}
+          >
             <div
-              style={{ position: "relative", width: "fit-content", maxWidth: "100%" }}
-              onMouseMove={handleOverlayMouseMove}
-              onMouseLeave={() => setDragging(null)}
+              ref={previewPanelRef}
+              style={{
+                background: "#fff",
+                border: `1px solid ${THEME.border}`,
+                borderRadius: "6px",
+                padding: "10px",
+                width: "100%",
+                minWidth: 0,
+                height: "100%",
+                boxSizing: "border-box",
+              }}
             >
-              <img
-                ref={imgRef}
-                src={`http://localhost:5000${previewImageUrl}?t=${Date.now()}`}
-                alt="seats-preview"
-                onLoad={refreshImageMetrics}
-                style={{ maxWidth: "100%", border: `1px solid ${THEME.border}`, borderRadius: "6px", marginTop: "8px", display: "block" }}
-              />
+              <strong>识别预览图</strong>
+              <div style={{ margin: "8px 0", color: THEME.muted, fontSize: "13px" }}>
+                左键拖动红框可移动；拖右下角小方块可调整大小。
+              </div>
               <div
-                style={{
-                  position: "absolute",
-                  top: 8,
-                  left: 0,
-                  width: `${imgMetrics.displayW}px`,
-                  height: `${imgMetrics.displayH}px`,
-                  pointerEvents: "none",
-                }}
+                style={{ position: "relative", width: "100%" }}
+                onMouseMove={handleOverlayMouseMove}
+                onMouseLeave={() => setDragging(null)}
               >
-                {seats.map((seat, idx) => {
-                  const sx = imgMetrics.displayW / imgMetrics.naturalW;
-                  const sy = imgMetrics.displayH / imgMetrics.naturalH;
-                  const left = seat[0] * sx;
-                  const top = seat[1] * sy;
-                  const width = Math.max(10, (seat[2] - seat[0]) * sx);
-                  const height = Math.max(10, (seat[3] - seat[1]) * sy);
-                  const isActive = idx === activeSeatIndex;
-                  return (
-                    <div
-                      key={`box-${idx}`}
-                      onMouseDown={(e) => startDragSeat(e, idx, "move")}
-                      style={{
-                        position: "absolute",
-                        left,
-                        top,
-                        width,
-                        height,
-                        border: `2px solid ${isActive ? "#8ca79a" : "#b78a84"}`,
-                        background: "rgba(255, 0, 0, 0.06)",
-                        boxSizing: "border-box",
-                        pointerEvents: "auto",
-                        cursor: "move",
-                      }}
-                    >
+                <img
+                  ref={imgRef}
+                  src={`http://localhost:5000${previewImageUrl}?t=${Date.now()}`}
+                  alt="seats-preview"
+                  onLoad={refreshImageMetrics}
+                  style={{ width: "100%", border: `1px solid ${THEME.border}`, borderRadius: "6px", display: "block" }}
+                />
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: `${imgMetrics.displayW}px`,
+                    height: `${imgMetrics.displayH}px`,
+                    pointerEvents: "none",
+                  }}
+                >
+                  {seats.map((seat, idx) => {
+                    const sx = imgMetrics.displayW / imgMetrics.naturalW;
+                    const sy = imgMetrics.displayH / imgMetrics.naturalH;
+                    const left = seat[0] * sx;
+                    const top = seat[1] * sy;
+                    const width = Math.max(10, (seat[2] - seat[0]) * sx);
+                    const height = Math.max(10, (seat[3] - seat[1]) * sy);
+                    const isActive = idx === activeSeatIndex;
+                    return (
                       <div
+                        key={`box-${idx}`}
+                        onMouseDown={(e) => startDragSeat(e, idx, "move")}
                         style={{
                           position: "absolute",
-                          left: 2,
-                          top: 2,
-                          background: isActive ? "#8ca79a" : "#b78a84",
-                          color: "#fff",
-                          fontSize: "12px",
-                          padding: "1px 5px",
-                          borderRadius: "3px",
+                          left,
+                          top,
+                          width,
+                          height,
+                          border: `2px solid ${isActive ? "#4f7f67" : "#b78a84"}`,
+                          background: isActive ? "rgba(79, 127, 103, 0.16)" : "rgba(255, 0, 0, 0.06)",
+                          boxSizing: "border-box",
+                          pointerEvents: "auto",
+                          cursor: "move",
                         }}
                       >
-                        {prefix}{idx + 1}
+                        <div
+                          style={{
+                            position: "absolute",
+                            left: 2,
+                            top: 2,
+                            background: isActive ? "#4f7f67" : "#b78a84",
+                            color: "#fff",
+                            fontSize: "12px",
+                            padding: "1px 5px",
+                            borderRadius: "3px",
+                          }}
+                        >
+                          {prefix}{idx + 1}
+                        </div>
+                        <div
+                          onMouseDown={(e) => startDragSeat(e, idx, "resize")}
+                          style={{
+                            position: "absolute",
+                            right: -5,
+                            bottom: -5,
+                            width: 10,
+                            height: 10,
+                            background: "#fff",
+                            border: `2px solid ${isActive ? "#4f7f67" : "#b78a84"}`,
+                            cursor: "nwse-resize",
+                          }}
+                        />
                       </div>
-                      <div
-                        onMouseDown={(e) => startDragSeat(e, idx, "resize")}
-                        style={{
-                          position: "absolute",
-                          right: -5,
-                          bottom: -5,
-                          width: 10,
-                          height: 10,
-                          background: "#fff",
-                          border: `2px solid ${isActive ? "#8ca79a" : "#b78a84"}`,
-                          cursor: "nwse-resize",
-                        }}
-                      />
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: "#fff",
+                border: `1px solid ${THEME.border}`,
+                borderRadius: "6px",
+                padding: "10px",
+                width: "100%",
+                minWidth: 0,
+                height: "100%",
+                boxSizing: "border-box",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+                <strong>座位列表</strong>
+                <span style={{ color: THEME.muted, fontSize: "12px" }}>共 {filteredSeatRows.length}/{seats.length}</span>
+              </div>
+              <input
+                type="text"
+                value={seatSearch}
+                onChange={(e) => setSeatSearch(e.target.value)}
+                placeholder="搜索编号，例如 A12"
+                style={{ width: "100%", marginBottom: "8px", padding: "8px", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}
+              />
+
+              <div
+                style={{
+                  height: `${Math.max(320, Math.round(imgMetrics.displayH || 0))}px`,
+                  overflow: "auto",
+                  border: `1px solid ${THEME.border}`,
+                  borderRadius: "6px",
+                }}
+              >
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px", tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: "16%" }} />
+                    <col style={{ width: "13%" }} />
+                    <col style={{ width: "13%" }} />
+                    <col style={{ width: "13%" }} />
+                    <col style={{ width: "13%" }} />
+                    <col style={{ width: "32%" }} />
+                  </colgroup>
+                  <thead>
+                    <tr style={{ background: THEME.soft }}>
+                      <th style={{ padding: "8px", textAlign: "left" }}>编号</th>
+                      <th style={{ padding: "8px" }}>x1</th>
+                      <th style={{ padding: "8px" }}>y1</th>
+                      <th style={{ padding: "8px" }}>x2</th>
+                      <th style={{ padding: "8px" }}>y2</th>
+                      <th style={{ padding: "8px" }}>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSeatRows.map(({ seat, idx, label }) => {
+                      const isActive = idx === activeSeatIndex;
+                      return (
+                        <tr
+                          key={`seat-row-${idx}`}
+                          onClick={() => setActiveSeatIndex(idx)}
+                          style={{
+                            borderTop: `1px solid ${THEME.border}`,
+                            background: isActive ? "#e9f2ee" : "#fff",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <td style={{ padding: "8px", fontWeight: isActive ? 700 : 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</td>
+                          {[0, 1, 2, 3].map((pos) => (
+                            <td key={pos} style={{ padding: "8px" }}>
+                              <input
+                                type="number"
+                                value={seat[pos]}
+                                onChange={(e) => updateSeatValue(idx, pos, e.target.value)}
+                                onFocus={() => setActiveSeatIndex(idx)}
+                                style={{ width: "100%", minWidth: 0, boxSizing: "border-box", padding: "5px" }}
+                              />
+                            </td>
+                          ))}
+                          <td style={{ padding: "8px" }}>
+                            <div style={{ display: "flex", gap: "6px", alignItems: "center", justifyContent: "center", flexWrap: "wrap" }}>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  selectSeatAndFocus(idx);
+                                }}
+                                style={{ padding: "5px 8px", cursor: "pointer", border: `1px solid ${THEME.border}`, background: "#fff" }}
+                              >
+                                跳转
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeSeat(idx);
+                                  if (activeSeatIndex === idx) {
+                                    setActiveSeatIndex(-1);
+                                  }
+                                }}
+                                style={{
+                                  padding: "5px 8px",
+                                  cursor: "pointer",
+                                  border: "none",
+                                  background: THEME.danger,
+                                  color: "#fff",
+                                }}
+                              >
+                                删除
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                    {filteredSeatRows.length === 0 && (
+                      <tr>
+                        <td colSpan={6} style={{ padding: "10px", color: THEME.muted }}>
+                          未匹配到座位编号。
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
@@ -510,7 +640,13 @@ const AdminSeatConfig = () => {
 
         <div style={{ marginBottom: "12px" }}>
           <strong>前端监控视频：</strong>
-          <div style={{ marginTop: "8px" }}>
+          <div
+            style={{
+              marginTop: "8px",
+              width: "100%",
+              maxWidth: "calc((100% - 12px) / 2)",
+            }}
+          >
             {monitorVideoUrl ? (
               <>
                 <video
@@ -518,7 +654,7 @@ const AdminSeatConfig = () => {
                   autoPlay
                   muted
                   playsInline
-                  style={{ width: "100%", maxWidth: "900px", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}
+                  style={{ width: "100%", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}
                   onError={() => {
                     setMonitorVideoError("视频加载失败：资源可能尚未生成完成或路径不可访问，请点击“刷新最近检测结果”后重试。");
                   }}
@@ -538,52 +674,6 @@ const AdminSeatConfig = () => {
           </div>
         </div>
 
-        <div style={{ overflowX: "auto", background: "#fff", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ background: THEME.soft }}>
-                <th style={{ padding: "8px" }}>编号</th>
-                <th style={{ padding: "8px" }}>x1</th>
-                <th style={{ padding: "8px" }}>y1</th>
-                <th style={{ padding: "8px" }}>x2</th>
-                <th style={{ padding: "8px" }}>y2</th>
-                <th style={{ padding: "8px" }}>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {seats.map((seat, idx) => (
-                <tr key={`seat-${idx}`} style={{ borderTop: `1px solid ${THEME.border}` }}>
-                  <td style={{ padding: "8px" }}>{prefix}{idx + 1}</td>
-                  {[0, 1, 2, 3].map((pos) => (
-                    <td key={pos} style={{ padding: "8px" }}>
-                      <input
-                        type="number"
-                        value={seat[pos]}
-                        onChange={(e) => updateSeatValue(idx, pos, e.target.value)}
-                        style={{ width: "90px", padding: "6px" }}
-                      />
-                    </td>
-                  ))}
-                  <td style={{ padding: "8px" }}>
-                    <button
-                      onClick={() => removeSeat(idx)}
-                      style={{ padding: "6px 10px", background: THEME.danger, color: "#fff", border: "none", cursor: "pointer" }}
-                    >
-                      删除
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {seats.length === 0 && (
-                <tr>
-                  <td colSpan={6} style={{ padding: "10px", color: THEME.muted }}>
-                    还没有座位框，请先点击“识别座位”。
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
   );
