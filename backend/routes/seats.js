@@ -111,6 +111,7 @@ router.get("/", async (req, res) => {
           seat_bbox: null,
           seat_preview_url: null,
           seat_preview_size: previewSize,
+          item_occupied_since: seatRow.item_occupied_since || null,
         };
       }
 
@@ -119,6 +120,7 @@ router.get("/", async (req, res) => {
         seat_bbox: seatBox.map((v) => Number(v)),
         seat_preview_url: previewImageUrl,
         seat_preview_size: previewSize,
+        item_occupied_since: seatRow.item_occupied_since || null,
       };
     });
 

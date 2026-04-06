@@ -13,7 +13,7 @@ DEFAULT_PERSON_MODEL = os.environ.get("PERSON_DETECT_MODEL", os.path.join(MODEL_
 DEFAULT_ITEM_MODEL = os.environ.get("ITEM_DETECT_MODEL", os.path.join(MODEL_DIR, "yolov8n.pt"))
 
 
-def detect_occupied_seats(frame, seats, person_model, item_model, target_item_ids, imgsz, conf):
+def detect_seat_states(frame, seats, person_model, item_model, target_item_ids, imgsz, conf):
     p_res = person_model(frame, conf=conf, verbose=False)[0]
     best_persons = []
     for box in p_res.boxes:
@@ -38,12 +38,23 @@ def detect_occupied_seats(frame, seats, person_model, item_model, target_item_id
     persons = merge_person_detections(best_persons, yolo_persons, iou_threshold=0.2)
 
     occupied = []
+    seat_states = []
     for i, seat in enumerate(seats):
         has_person = any(bottom_in_box([p[0], p[1], p[2], p[3]], seat) for p in persons)
         has_item = any(bottom_in_box([it[0], it[1], it[2], it[3]], seat) for it in items)
-        if has_person or has_item:
+        is_occupied = has_person or has_item
+        seat_states.append({
+            "index": i,
+            "hasPerson": bool(has_person),
+            "hasItem": bool(has_item),
+            "occupied": bool(is_occupied),
+        })
+        if is_occupied:
             occupied.append(i)
-    return occupied
+    return {
+        "occupiedIndices": occupied,
+        "seatStates": seat_states,
+    }
 
 
 def create_video_writer(out_path, fps, width, height):
@@ -175,6 +186,7 @@ def main():
     frame_idx = 0
     frames_written = 0
     occupied_seats = []
+    seat_states = []
     current_occupied = set()
     frame = first_frame
     while frame is not None:
@@ -185,8 +197,7 @@ def main():
         if args.realtime_detect:
             interval = max(1, args.detect_interval)
             if frame_idx % interval == 0:
-                current_occupied = set(
-                    detect_occupied_seats(
+                detection_result = detect_seat_states(
                         frame,
                         seats,
                         person_model,
@@ -195,12 +206,13 @@ def main():
                         args.imgsz,
                         args.conf,
                     )
-                )
+                current_occupied = set(detection_result["occupiedIndices"])
                 occupied_seats = sorted(current_occupied)
+                seat_states = detection_result["seatStates"]
         else:
             # 默认兼容旧逻辑：只在第300帧（10秒）检测一次
             if frame_idx == 299:
-                occupied_seats = detect_occupied_seats(
+                detection_result = detect_seat_states(
                     frame,
                     seats,
                     person_model,
@@ -209,6 +221,8 @@ def main():
                     args.imgsz,
                     args.conf,
                 )
+                occupied_seats = detection_result["occupiedIndices"]
+                seat_states = detection_result["seatStates"]
                 current_occupied = set(occupied_seats)
 
         # 始终绘制高对比座位框，便于在压缩后视频中观察
@@ -252,6 +266,7 @@ def main():
         "occupiedIndices": occupied_indices,
         # 兼容旧接口：仍返回1-based occupied
         "occupied": [i + 1 for i in occupied_indices],
+        "seatStates": seat_states,
         "source": {
             "startFrame": int(start_frame),
             "processedFrames": int(frames_written),

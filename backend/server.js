@@ -81,6 +81,7 @@ const seatGenerationTasks = new Map();
 let latestOccupationResult = null;
 let presencePromptFeatureAvailable = true;
 let leavePromptFeatureAvailable = true;
+let seatItemOccupancyColumnReady = false;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -203,6 +204,27 @@ async function ensureNotificationHistoryTable() {
     console.log("notification_history table ready");
   } catch (err) {
     console.warn("Unable to ensure notification_history table:", err.message || err);
+  }
+}
+
+async function ensureSeatItemOccupancyColumn() {
+  if (seatItemOccupancyColumnReady) return;
+
+  try {
+    const db = require("./config/db");
+    const conn = await db;
+    const [rows] = await conn.query("SHOW COLUMNS FROM seats LIKE 'item_occupied_since'");
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      await conn.query(
+        "ALTER TABLE seats ADD COLUMN item_occupied_since DATETIME DEFAULT NULL AFTER status",
+      );
+    }
+
+    seatItemOccupancyColumnReady = true;
+    console.log("seats.item_occupied_since column ready");
+  } catch (err) {
+    console.warn("Unable to ensure seats.item_occupied_since column:", err.message || err);
   }
 }
 
@@ -897,6 +919,11 @@ async function runSeatDetection({
       );
     }
 
+    const seatStates = Array.isArray(result?.seatStates) ? result.seatStates : [];
+    const seatStateByIndex = new Map(
+      seatStates.map((state) => [Number(state?.index), state]),
+    );
+
     const occupiedIndexes = Array.isArray(result?.occupiedIndices)
       ? result.occupiedIndices
       : Array.isArray(result?.occupied)
@@ -915,6 +942,29 @@ async function runSeatDetection({
       throw new Error(`区域 ${area} 没有可检测座位，请先在举报中心完成座位识别并确认生成`);
     }
 
+    for (const [index, seatRow] of areaSeats.entries()) {
+      const seatId = Number(seatRow.seat_id);
+      if (!Number.isInteger(seatId)) {
+        continue;
+      }
+
+      const state = seatStateByIndex.get(index) || null;
+      const hasPerson = Boolean(state?.hasPerson);
+      const hasItem = Boolean(state?.hasItem);
+
+      if (hasItem && !hasPerson) {
+        await conn.query(
+          "UPDATE seats SET item_occupied_since = COALESCE(item_occupied_since, NOW()) WHERE seat_id = ?",
+          [seatId],
+        );
+      } else {
+        await conn.query(
+          "UPDATE seats SET item_occupied_since = NULL WHERE seat_id = ?",
+          [seatId],
+        );
+      }
+    }
+
     const occupiedSeatIds = occupiedIndexes
       .map((idx) => areaSeats[idx]?.seat_id)
       .filter((id) => Number.isInteger(id));
@@ -931,6 +981,10 @@ async function runSeatDetection({
     );
 
     for (const seatId of occupiedSeatIds) {
+      const seatIndex = occupiedIndexes.find((idx) => areaSeats[idx]?.seat_id === seatId);
+      const seatState = Number.isInteger(seatIndex) ? seatStateByIndex.get(seatIndex) || null : null;
+      const hasPerson = Boolean(seatState?.hasPerson);
+
       const [activeReservations] = await conn.query(
         "SELECT 1 FROM reservations WHERE seat_id = ? AND res_status = 'active' LIMIT 1",
         [seatId],
@@ -951,7 +1005,7 @@ async function runSeatDetection({
         // 有待签到预约时先保持“已预约”，并发起“是否本人入座”确认
         await conn.query("UPDATE seats SET status = 1 WHERE seat_id = ?", [seatId]);
 
-        if (presencePromptFeatureAvailable) {
+        if (presencePromptFeatureAvailable && hasPerson) {
           try {
             const pending = pendingReservations[0];
             const [existingPrompts] = await conn.query(
@@ -1169,6 +1223,7 @@ async function runSeatDetection({
   await ensurePresencePromptTable();
   await ensureLeavePromptTable();
   await ensureNotificationHistoryTable();
+  await ensureSeatItemOccupancyColumn();
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });

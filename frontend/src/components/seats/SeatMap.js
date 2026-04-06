@@ -50,6 +50,9 @@ const SeatMap = () => {
   const [autoReserveRecommendations, setAutoReserveRecommendations] = useState([]);
   const [previewCacheKey, setPreviewCacheKey] = useState(Date.now());
   const [lastDetectionAt, setLastDetectionAt] = useState(null);
+  const [adminMonitorVideoUrl, setAdminMonitorVideoUrl] = useState("");
+  const [adminMonitorVideoError, setAdminMonitorVideoError] = useState("");
+  const [nowTs, setNowTs] = useState(Date.now());
 
   useEffect(() => {
     // 从 token 解析 role
@@ -102,6 +105,33 @@ const SeatMap = () => {
     }
   };
 
+  const normalizeMonitorVideoUrl = (rawUrl) => {
+    if (!rawUrl || typeof rawUrl !== "string") return "";
+    const cleaned = rawUrl.trim().replace(/\\\\/g, "/");
+    const withoutDupPrefix = cleaned.replace("/python-assets/python_scripts/", "/python-assets/");
+    if (/^https?:\/\//i.test(withoutDupPrefix)) return withoutDupPrefix;
+    return withoutDupPrefix.startsWith("/") ? withoutDupPrefix : `/${withoutDupPrefix}`;
+  };
+
+  const fetchAdminMonitorVideo = async () => {
+    try {
+      const fromSession = sessionStorage.getItem("latestOccupationVideoUrl") || "";
+      if (fromSession) {
+        setAdminMonitorVideoUrl(normalizeMonitorVideoUrl(fromSession));
+      }
+
+      const resp = await api.get("/detect-occupation/latest", { params: { _: Date.now() } });
+      const latest = normalizeMonitorVideoUrl(resp?.data?.videoUrl || "");
+      if (latest) {
+        setAdminMonitorVideoUrl(latest);
+        sessionStorage.setItem("latestOccupationVideoUrl", latest);
+        setAdminMonitorVideoError("");
+      }
+    } catch (err) {
+      // latest 可能暂时 404，保留已加载的视频地址
+    }
+  };
+
   useEffect(() => {
     if (!selectedArea) return undefined;
 
@@ -111,7 +141,11 @@ const SeatMap = () => {
       if (polling) return;
       polling = true;
       try {
-        await Promise.all([fetchSeats(selectedArea), fetchDetectionStatus()]);
+        const jobs = [fetchSeats(selectedArea), fetchDetectionStatus()];
+        if (role === "admin") {
+          jobs.push(fetchAdminMonitorVideo());
+        }
+        await Promise.all(jobs);
       } finally {
         polling = false;
       }
@@ -124,7 +158,7 @@ const SeatMap = () => {
     }, 10000);
 
     return () => clearInterval(timer);
-  }, [selectedArea]);
+  }, [selectedArea, role]);
 
   const handleAreaChange = (e) => {
     const area = e.target.value;
@@ -168,6 +202,39 @@ const SeatMap = () => {
   const getSeatTextColor = (status) => {
     if (status === 0 || status === 1) return "#2f3637";
     return "#ffffff";
+  };
+
+  const hasActiveItemTimer = seats.some(
+    (seat) => Boolean(seat?.item_occupied_since) && Number(seat?.status) !== 0,
+  );
+
+  useEffect(() => {
+    if (!hasActiveItemTimer) return undefined;
+
+    const timer = setInterval(() => {
+      setNowTs(Date.now());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [hasActiveItemTimer]);
+
+  const formatItemOccupancyDuration = (startedAt) => {
+    if (!startedAt) return "";
+
+    const startedMs = new Date(startedAt).getTime();
+    if (!Number.isFinite(startedMs)) return "";
+
+    const elapsedSeconds = Math.max(0, Math.floor((nowTs - startedMs) / 1000));
+    const hours = Math.floor(elapsedSeconds / 3600);
+    const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+    const seconds = elapsedSeconds % 60;
+    const pad = (value) => String(value).padStart(2, "0");
+
+    if (hours > 0) {
+      return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+    }
+
+    return `${pad(minutes)}:${pad(seconds)}`;
   };
 
   const toAbsoluteAssetUrl = (rawUrl, cacheKey) => {
@@ -544,6 +611,8 @@ const SeatMap = () => {
                     const latestVideoUrl = resp?.data?.videoUrl || "";
                     if (latestVideoUrl) {
                       sessionStorage.setItem("latestOccupationVideoUrl", latestVideoUrl);
+                      setAdminMonitorVideoUrl(normalizeMonitorVideoUrl(latestVideoUrl));
+                      setAdminMonitorVideoError("");
                     }
                     window.dispatchEvent(new CustomEvent("openAdminReports"));
                     alert("占座检测完成，已跳转到举报中心查看视频结果");
@@ -706,7 +775,7 @@ const SeatMap = () => {
         <div style={{ minWidth: "520px", flex: "1 1 520px" }}>
           <h3 style={{ marginTop: 0, marginBottom: "8px" }}>座位图</h3>
           <div style={{ display: "flex", gap: "12px", alignItems: "stretch", flexWrap: "nowrap" }}>
-            {seatMapPreviewUrl ? (
+            {(role === "admin" && adminMonitorVideoUrl) || seatMapPreviewUrl ? (
               <div
                 style={{
                   position: "relative",
@@ -720,11 +789,45 @@ const SeatMap = () => {
                   flex: "0 0 auto",
                 }}
               >
-                <img
-                  src={seatMapPreviewUrl}
-                  alt="seat-map-preview"
-                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                />
+                {role === "admin" && adminMonitorVideoUrl ? (
+                  <video
+                    autoPlay
+                    muted
+                    controls
+                    playsInline
+                    onError={() => {
+                      setAdminMonitorVideoError("实时监控视频加载失败，请点击运行占座检测后重试。");
+                    }}
+                    src={/^https?:\/\//i.test(adminMonitorVideoUrl)
+                      ? adminMonitorVideoUrl
+                      : `http://localhost:5000${adminMonitorVideoUrl}`}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                  />
+                ) : (
+                  <img
+                    src={seatMapPreviewUrl}
+                    alt="seat-map-preview"
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                  />
+                )}
+                {role === "admin" && adminMonitorVideoError && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: "8px",
+                      right: "8px",
+                      bottom: "8px",
+                      padding: "6px 8px",
+                      borderRadius: "6px",
+                      background: "rgba(183, 138, 132, 0.9)",
+                      color: "#fff",
+                      fontSize: "12px",
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    {adminMonitorVideoError}
+                  </div>
+                )}
                 {seats.map((seat) => {
                   const bbox = Array.isArray(seat?.seat_bbox) ? seat.seat_bbox : null;
                   if (!bbox || bbox.length !== 4) return null;
@@ -757,8 +860,29 @@ const SeatMap = () => {
                           : "rgba(255,255,255,0.08)",
                         boxSizing: "border-box",
                         pointerEvents: "none",
+                        overflow: "hidden",
                       }}
                     >
+                      {seat.item_occupied_since && Number(seat.status) !== 0 && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: "4px",
+                            left: "4px",
+                            right: "4px",
+                            padding: "2px 4px",
+                            borderRadius: "4px",
+                            background: "rgba(18, 24, 28, 0.72)",
+                            color: "#fff",
+                            fontSize: "11px",
+                            fontWeight: 700,
+                            textAlign: "center",
+                            lineHeight: 1.2,
+                          }}
+                        >
+                          物品占座 {formatItemOccupancyDuration(seat.item_occupied_since)}
+                        </div>
+                      )}
                       <span
                         style={{
                           position: "absolute",

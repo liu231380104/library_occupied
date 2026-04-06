@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS `seats` (
   `area` VARCHAR(50) NOT NULL,              -- 如 "二楼阅览室"
   -- 状态码建议：0-空闲(绿), 1-已预约(黄), 2-已占用(红), 3-异常占座(灰)
   `status` TINYINT DEFAULT 0,
+  `item_occupied_since` DATETIME DEFAULT NULL,
   `last_updated` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
