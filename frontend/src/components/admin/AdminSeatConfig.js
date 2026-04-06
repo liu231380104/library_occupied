@@ -87,7 +87,7 @@ const AdminSeatConfig = () => {
       setBusyAction("occupy-detect");
       const resp = await api.post(
         "/detect-occupation",
-        { videoPath, area },
+        { videoPath, area, saveVideo: true },
         { timeout: 300000 },
       );
       const result = resp.data || {};

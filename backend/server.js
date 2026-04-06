@@ -417,7 +417,11 @@ app.post("/api/model/occupation-detect", async (req, res) => {
   const maxFrames = Number(req.body?.maxFrames) || 300;
 
   try {
-    const result = await runSeatDetection({ videoPath, area, maxFrames });
+    const saveVideoRaw = req.body?.saveVideo;
+    const saveVideo = saveVideoRaw === true
+      || saveVideoRaw === 1
+      || String(saveVideoRaw || "").trim().toLowerCase() === "true";
+    const result = await runSeatDetection({ videoPath, area, maxFrames, saveVideo });
     return apiSuccess(res, result, "occupation detection succeeded");
   } catch (e) {
     console.error("模型接口占座识别失败:", e);
@@ -708,7 +712,10 @@ app.post("/api/detect-occupation", async (req, res) => {
   try {
     const videoPath = req.body?.videoPath || DEFAULT_TEST_VIDEO;
     const area = req.body?.area || "A区";
-    const saveVideo = req.body?.saveVideo !== false;
+    const saveVideoRaw = req.body?.saveVideo;
+    const saveVideo = saveVideoRaw === true
+      || saveVideoRaw === 1
+      || String(saveVideoRaw || "").trim().toLowerCase() === "true";
     const requestedMaxFramesRaw = Number(req.body?.maxFrames);
     const requestedDetectIntervalRaw = Number(req.body?.detectInterval);
     const requestedMaxFrames =
@@ -810,7 +817,7 @@ async function runSeatDetection({
   maxFrames = 0,
   detectInterval = 8,
   timeoutMs = 180000,
-  saveVideo = true,
+  saveVideo = false,
   startFrame = 0,
   advanceCursor = false,
 }) {

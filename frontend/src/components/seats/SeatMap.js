@@ -12,6 +12,7 @@ const THEME = {
   danger: "#b78a84",
   warning: "#c4ab87",
   success: "#8ca79a",
+  focus: "#2f7f78",
   status: {
     free: "#a6b8a7",
     reserved: "#cbbca3",
@@ -46,6 +47,7 @@ const SeatMap = () => {
   const [autoReserveMode, setAutoReserveMode] = useState("balanced");
   const [strictQuietMode, setStrictQuietMode] = useState(true);
   const [autoReserveHint, setAutoReserveHint] = useState("");
+  const [autoReserveRecommendations, setAutoReserveRecommendations] = useState([]);
   const [previewCacheKey, setPreviewCacheKey] = useState(Date.now());
   const [lastDetectionAt, setLastDetectionAt] = useState(null);
 
@@ -127,6 +129,8 @@ const SeatMap = () => {
   const handleAreaChange = (e) => {
     const area = e.target.value;
     setSelectedArea(area);
+    setAutoReserveHint("");
+    setAutoReserveRecommendations([]);
     setLoading(true);
     fetchSeats(area);
   };
@@ -215,7 +219,10 @@ const SeatMap = () => {
   });
 
   const freeSeats = orderedSeats.filter((seat) => Number(seat?.status) === 0);
-  const highlightedSeatId = hoveredSeatId ?? focusedSeatId;
+  const highlightedSeatId = focusedSeatId;
+  const recommendedSeatRankMap = new Map(
+    autoReserveRecommendations.map((item) => [Number(item?.seat_id), Number(item?.rank) || null]),
+  );
 
   const handleSeatClick = (seat) => {
     // 管理员可以编辑座位状态
@@ -352,6 +359,8 @@ const SeatMap = () => {
       alert("预约成功，系统将保留15分钟");
       setShowReservationForm(false);
       setSelectedSeat(null);
+      setAutoReserveHint("");
+      setAutoReserveRecommendations([]);
       // 刷新座位状态
       fetchSeats(selectedArea);
     } catch (err) {
@@ -372,28 +381,63 @@ const SeatMap = () => {
   const handleAutoReserve = async () => {
     if (role === "admin") return;
     setAutoReserveHint("");
+    setAutoReserveRecommendations([]);
     setAutoReserving(true);
     try {
       const response = await api.post("/reservations/auto", {
         area: selectedArea || undefined,
         mode: autoReserveMode,
         strictQuiet: autoReserveMode === "quiet" ? strictQuietMode : false,
+        previewOnly: true,
       });
-      const picked = response?.data?.seat;
-      const strategyReasons = response?.data?.strategy?.reasons;
-      if (Array.isArray(strategyReasons) && strategyReasons.length > 0) {
-        setAutoReserveHint(`推荐理由：${strategyReasons.join("，")}`);
+      const recommendations = Array.isArray(response?.data?.recommendations)
+        ? response.data.recommendations
+        : [];
+      if (recommendations.length === 0 && response?.data?.seat?.seat_id) {
+        setAutoReserveHint("后端当前仍在执行旧版直接预约逻辑，请重启后端服务后重试推荐预览。");
+        return;
       }
-      if (picked?.seat_number) {
-        alert(`一键预约成功：${picked.area}${picked.seat_number}（保留15分钟）`);
+      setAutoReserveRecommendations(recommendations);
+      if (recommendations.length > 0) {
+        const top = recommendations[0];
+        const topReasons = Array.isArray(top?.reasons) ? top.reasons.join("，") : "";
+        setAutoReserveHint(
+          `已生成 ${recommendations.length} 个推荐，首选 ${top.area}${top.seat_number}${topReasons ? `（${topReasons}）` : ""}`,
+        );
       } else {
-        alert(response?.data?.message || "一键预约成功，系统将保留15分钟");
+        setAutoReserveHint(response?.data?.message || "暂无可推荐座位");
       }
-      fetchSeats(selectedArea);
     } catch (err) {
       alert(err.response?.data?.message || "一键预约失败，请稍后重试");
     } finally {
       setAutoReserving(false);
+    }
+  };
+
+  const handlePickRecommendedSeat = (recommendation) => {
+    const seatId = Number(recommendation?.seat_id);
+    if (!Number.isInteger(seatId)) return;
+
+    const seat = seats.find((item) => Number(item?.seat_id) === seatId);
+    if (!seat || Number(seat.status) !== 0) {
+      alert("该推荐座位状态已变化，请重新生成推荐");
+      fetchSeats(selectedArea);
+      return;
+    }
+
+    const isSameFocusedSeat = Number(focusedSeatId) === seatId;
+    const isSameSelectedSeat = Number(selectedSeat?.seat_id) === seatId;
+
+    setFocusedSeatId(seatId);
+    setHoveredSeatId(seatId);
+    setSelectedSeat(seat);
+
+    // 第一次点击仅定位高亮，第二次点击同一推荐才弹出预约确认
+    if (isSameFocusedSeat && isSameSelectedSeat) {
+      setShowReservationForm(true);
+    } else {
+      setShowReservationForm(false);
+      setAutoReserveHint(`已定位 ${seat.area}${seat.seat_number}，再次点击该推荐可弹出预约确认`);
     }
   };
 
@@ -480,7 +524,7 @@ const SeatMap = () => {
                   opacity: autoReserving ? 0.8 : 1,
                 }}
               >
-                {autoReserving ? "预约中..." : "一键智能预约"}
+                {autoReserving ? "生成中..." : "生成智能推荐"}
               </button>
             </>
           )}
@@ -489,9 +533,14 @@ const SeatMap = () => {
               <button
                 onClick={async () => {
                   try {
-                    const resp = await api.post("/detect-occupation", {
-                      area: selectedArea || "A区",
-                    });
+                    const resp = await api.post(
+                      "/detect-occupation",
+                      {
+                        area: selectedArea || "A区",
+                        saveVideo: true,
+                      },
+                      { timeout: 300000 },
+                    );
                     const latestVideoUrl = resp?.data?.videoUrl || "";
                     if (latestVideoUrl) {
                       sessionStorage.setItem("latestOccupationVideoUrl", latestVideoUrl);
@@ -537,6 +586,42 @@ const SeatMap = () => {
             {autoReserveHint}
           </div>
         )}
+        {role !== "admin" && autoReserveRecommendations.length > 0 && (
+          <div
+            style={{
+              width: "100%",
+              marginBottom: "8px",
+              padding: "10px",
+              borderRadius: "8px",
+              border: `1px solid ${THEME.primary}`,
+              background: "#e7edf2",
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: "8px", color: "#425867" }}>
+              智能推荐座位（先定位高亮，再次点击同一项确认预约）
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              {autoReserveRecommendations.map((item) => (
+                <button
+                  key={`auto-rec-${item.seat_id}`}
+                  onClick={() => handlePickRecommendedSeat(item)}
+                  style={{
+                    border: `1px solid ${THEME.primary}`,
+                    borderRadius: "6px",
+                    padding: "6px 10px",
+                    background: "#fff",
+                    color: "#425867",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                  title={Array.isArray(item?.reasons) ? item.reasons.join("，") : ""}
+                >
+                  {item.rank}. {item.area}{item.seat_number}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div
           style={{
             display: "grid",
@@ -546,59 +631,75 @@ const SeatMap = () => {
           }}
         >
           {orderedSeats.map((seat) => (
-            <div
-              key={seat.seat_id}
-              data-seat-id={seat.seat_id}
-              style={{
-                width: "100px",
-                height: "100px",
-                backgroundColor: getSeatColor(seat.status),
-                border: highlightedSeatId === seat.seat_id
-                  ? `2px solid ${THEME.warning}`
-                  : `2px solid ${THEME.border}`,
-                borderRadius: "5px",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: role === "admin" || seat.status === 0 ? "pointer" : "not-allowed",
-                color: getSeatTextColor(seat.status),
-                boxShadow: highlightedSeatId === seat.seat_id ? "0 0 0 3px rgba(196, 171, 135, 0.25)" : "none",
-              }}
-              onClick={() => handleSeatClick(seat)}
-              onMouseEnter={() => setHoveredSeatId(seat.seat_id)}
-              onMouseLeave={() => setHoveredSeatId(null)}
-              title={
-                seat.status === 0
-                  ? `点击预约 ${seat.seat_number}`
-                  : `${seat.seat_number} - ${getStatusText(seat.status)}`
-              }
-            >
-              <div style={{ fontSize: "18px", fontWeight: "bold" }}>
-                {seat.seat_number}
-              </div>
-              <div style={{ fontSize: "12px" }}>{getStatusText(seat.status)}</div>
-              {role !== "admin" && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleReportClick(seat);
-                  }}
+            (() => {
+              const recommendedRank = recommendedSeatRankMap.get(Number(seat.seat_id));
+              const isRecommended = Number.isInteger(recommendedRank);
+              return (
+                <div
+                  key={seat.seat_id}
+                  data-seat-id={seat.seat_id}
                   style={{
-                    marginTop: "5px",
-                    padding: "2px 6px",
-                    fontSize: "12px",
-                    border: `1px solid ${THEME.danger}`,
-                    borderRadius: "4px",
-                    backgroundColor: "#ffffff",
-                    color: THEME.danger,
-                    cursor: "pointer",
+                    width: "100px",
+                    height: "100px",
+                    backgroundColor: getSeatColor(seat.status),
+                    border: highlightedSeatId === seat.seat_id
+                      ? `2px solid ${THEME.focus}`
+                      : `2px solid ${THEME.border}`,
+                    borderRadius: "5px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: role === "admin" || seat.status === 0 ? "pointer" : "not-allowed",
+                    color: getSeatTextColor(seat.status),
+                    boxShadow: highlightedSeatId === seat.seat_id
+                      ? "0 0 0 4px rgba(47, 127, 120, 0.28)"
+                      : "none",
                   }}
+                  onClick={() => {
+                    setFocusedSeatId(seat.seat_id);
+                    handleSeatClick(seat);
+                  }}
+                  onMouseEnter={() => setHoveredSeatId(seat.seat_id)}
+                  onMouseLeave={() => setHoveredSeatId(null)}
+                  title={
+                    seat.status === 0
+                      ? `点击预约 ${seat.seat_number}`
+                      : `${seat.seat_number} - ${getStatusText(seat.status)}`
+                  }
                 >
-                  举报状态
-                </button>
-              )}
-            </div>
+                  {isRecommended && (
+                    <div style={{ fontSize: "10px", color: "#425867", fontWeight: 700, marginBottom: "2px" }}>
+                      推荐#{recommendedRank}
+                    </div>
+                  )}
+                  <div style={{ fontSize: "18px", fontWeight: "bold" }}>
+                    {seat.seat_number}
+                  </div>
+                  <div style={{ fontSize: "12px" }}>{getStatusText(seat.status)}</div>
+                  {role !== "admin" && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleReportClick(seat);
+                      }}
+                      style={{
+                        marginTop: "5px",
+                        padding: "2px 6px",
+                        fontSize: "12px",
+                        border: `1px solid ${THEME.danger}`,
+                        borderRadius: "4px",
+                        backgroundColor: "#ffffff",
+                        color: THEME.danger,
+                        cursor: "pointer",
+                      }}
+                    >
+                      举报状态
+                    </button>
+                  )}
+                </div>
+              );
+            })()
           ))}
         </div>
 
@@ -636,6 +737,8 @@ const SeatMap = () => {
                   const sx = seatMapDisplayWidth / Math.max(seatMapNaturalWidth, 1);
                   const sy = seatMapDisplayHeight / Math.max(seatMapNaturalHeight, 1);
                   const isHighlight = highlightedSeatId === seat.seat_id;
+                  const recommendedRank = recommendedSeatRankMap.get(Number(seat.seat_id));
+                  const isRecommended = Number.isInteger(recommendedRank);
 
                   return (
                     <div
@@ -646,8 +749,12 @@ const SeatMap = () => {
                         top: `${y1 * sy}px`,
                         width: `${Math.max(8, (x2 - x1) * sx)}px`,
                         height: `${Math.max(8, (y2 - y1) * sy)}px`,
-                        border: isHighlight ? `2px solid ${THEME.warning}` : "1px solid rgba(255,255,255,0.55)",
-                        background: isHighlight ? "rgba(196, 171, 135, 0.26)" : "rgba(255,255,255,0.08)",
+                        border: isHighlight
+                          ? `2px solid ${THEME.focus}`
+                          : "1px solid rgba(255,255,255,0.55)",
+                        background: isHighlight
+                          ? "rgba(47, 127, 120, 0.24)"
+                          : "rgba(255,255,255,0.08)",
                         boxSizing: "border-box",
                         pointerEvents: "none",
                       }}
@@ -663,7 +770,7 @@ const SeatMap = () => {
                           padding: "1px 3px",
                         }}
                       >
-                        {seat.seat_number}
+                        {isRecommended ? `R${recommendedRank} ${seat.seat_number}` : seat.seat_number}
                       </span>
                     </div>
                   );

@@ -407,6 +407,10 @@ router.post("/auto", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const requestedArea = typeof req.body?.area === "string" ? req.body.area.trim() : "";
   const mode = normalizeAutoMode(req.body?.strategy?.mode || req.body?.mode);
+  const previewOnlyRaw = req.body?.previewOnly ?? req.body?.dryRun;
+  const previewOnly = previewOnlyRaw === true
+    || previewOnlyRaw === 1
+    || String(previewOnlyRaw || "").trim().toLowerCase() === "true";
   const strictQuiet = normalizeStrictQuiet(
     req.body?.strategy?.strictQuiet ?? req.body?.strictQuiet,
     mode,
@@ -666,6 +670,33 @@ router.post("/auto", authenticateToken, async (req, res) => {
     const rankedCandidates = mode === "quiet"
       ? (strictQuietCandidates.length > 0 ? strictQuietCandidates : scoredCandidates)
       : scoredCandidates;
+
+    if (previewOnly) {
+      const recommendations = rankedCandidates.slice(0, 8).map((item, idx) => ({
+        rank: idx + 1,
+        seat_id: item.seat_id,
+        seat_number: item.seat_number,
+        area: item.area,
+        score: item.score,
+        reasons: item.reasons,
+        scoreBreakdown: item.scoreBreakdown,
+        nearOccupied: item.nearOccupied,
+        nearTotal: item.nearTotal,
+      }));
+
+      return res.json({
+        message: recommendations.length > 0
+          ? "已生成推荐座位，请点击你想要的位置完成预约"
+          : "暂无可推荐座位",
+        previewOnly: true,
+        strategy: {
+          mode,
+          strictQuiet,
+          considered: scoredCandidates.length,
+        },
+        recommendations,
+      });
+    }
 
     const tx = await connection.getConnection();
     try {
@@ -1382,7 +1413,7 @@ router.get("/notifications", authenticateToken, async (req, res) => {
         persisted: true,
         source: row.source,
         sourceKey: row.source_key,
-        isRead: Boolean(row.is_read),
+        isRead: Number(row.is_read) === 1,
         action: payload?.promptId
           ? {
               promptId: payload.promptId,
