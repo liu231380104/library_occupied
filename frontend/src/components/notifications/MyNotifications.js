@@ -61,19 +61,48 @@ const MyNotifications = () => {
     };
   };
 
-  const handlePresencePrompt = async (promptId, isSelf) => {
+  const handlePromptAction = async (action, value) => {
+    const promptId = action?.promptId;
+    const kind = action?.kind || "presence";
     if (!promptId) return;
     setProcessingPromptId(promptId);
     try {
-      const response = await api.post(`/reservations/presence-prompts/${promptId}/respond`, {
-        isSelf,
-      });
+      const endpoint =
+        kind === "leave"
+          ? `/reservations/leave-prompts/${promptId}/respond`
+          : `/reservations/presence-prompts/${promptId}/respond`;
+      const body = kind === "leave" ? { shouldRelease: value } : { isSelf: value };
+
+      const response = await api.post(endpoint, body);
+      if (Number.isInteger(Number(action?.notificationId))) {
+        try {
+          await api.patch("/reservations/notifications/read", {
+            notificationIds: [Number(action.notificationId)],
+          });
+        } catch (e) {
+          // ignore read mark failure
+        }
+      }
       alert(response.data?.message || "已提交确认");
       await fetchNotifications();
     } catch (err) {
       alert(err.response?.data?.message || "提交确认失败");
     } finally {
       setProcessingPromptId(null);
+    }
+  };
+
+  const handleMarkRead = async (item) => {
+    const notificationId = Number(item?.notificationId);
+    if (!Number.isInteger(notificationId) || notificationId <= 0) return;
+
+    try {
+      await api.patch("/reservations/notifications/read", {
+        notificationIds: [notificationId],
+      });
+      await fetchNotifications();
+    } catch (err) {
+      alert(err.response?.data?.message || "标记已读失败");
     }
   };
 
@@ -96,16 +125,32 @@ const MyNotifications = () => {
                 ...getCardStyle(item.type),
                 borderRadius: "8px",
                 padding: "12px",
+                opacity: item.isRead ? 0.72 : 1,
               }}
             >
-              <div style={{ fontWeight: "bold", marginBottom: "6px" }}>
-                {item.title}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                <div style={{ fontWeight: "bold" }}>{item.title}</div>
+                <button
+                  onClick={() => handleMarkRead(item)}
+                  disabled={item.isRead}
+                  style={{
+                    padding: "4px 8px",
+                    backgroundColor: item.isRead ? "#a7b1b4" : "#7f95a6",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: item.isRead ? "not-allowed" : "pointer",
+                    fontSize: "12px",
+                  }}
+                >
+                  {item.isRead ? "已读" : "标记已读"}
+                </button>
               </div>
               <div style={{ marginBottom: "6px", color: "#454d4e" }}>{item.message}</div>
               {item.type === "question" && item.action?.promptId && (
                 <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
                   <button
-                    onClick={() => handlePresencePrompt(item.action.promptId, true)}
+                    onClick={() => handlePromptAction({ ...item.action, notificationId: item.notificationId }, true)}
                     disabled={processingPromptId === item.action.promptId}
                     style={{
                       padding: "6px 10px",
@@ -116,10 +161,10 @@ const MyNotifications = () => {
                       cursor: processingPromptId === item.action.promptId ? "not-allowed" : "pointer",
                     }}
                   >
-                    是本人入座
+                    {item.action?.kind === "leave" ? "是，释放座位" : "是本人入座"}
                   </button>
                   <button
-                    onClick={() => handlePresencePrompt(item.action.promptId, false)}
+                    onClick={() => handlePromptAction({ ...item.action, notificationId: item.notificationId }, false)}
                     disabled={processingPromptId === item.action.promptId}
                     style={{
                       padding: "6px 10px",
@@ -130,7 +175,7 @@ const MyNotifications = () => {
                       cursor: processingPromptId === item.action.promptId ? "not-allowed" : "pointer",
                     }}
                   >
-                    不是我
+                    {item.action?.kind === "leave" ? "否，临时离开" : "不是我"}
                   </button>
                 </div>
               )}

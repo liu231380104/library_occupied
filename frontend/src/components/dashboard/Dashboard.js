@@ -97,12 +97,18 @@ const Dashboard = () => {
       return;
     }
 
+    // 消息页自身会轮询，避免与浮窗轮询叠加造成重复请求
+    if (activeTab === "notifications") {
+      setFloatingNotice(null);
+      return;
+    }
+
     const fetchTopNotification = async () => {
       try {
         const response = await api.get("/reservations/notifications");
         const list = response.data || [];
         const visible = list.find(
-          (item) => !dismissedNoticeIds.includes(item.id),
+          (item) => !item.isRead && !dismissedNoticeIds.includes(item.id),
         );
         setFloatingNotice(visible || null);
       } catch (error) {
@@ -113,7 +119,20 @@ const Dashboard = () => {
     fetchTopNotification();
     const timer = setInterval(fetchTopNotification, 30000);
     return () => clearInterval(timer);
-  }, [role, dismissedNoticeIds]);
+  }, [role, dismissedNoticeIds, activeTab]);
+
+  const markNoticeRead = async (notice) => {
+    const notificationId = Number(notice?.notificationId);
+    if (!Number.isInteger(notificationId) || notificationId <= 0) return;
+
+    try {
+      await api.patch("/reservations/notifications/read", {
+        notificationIds: [notificationId],
+      });
+    } catch (e) {
+      // 忽略标记失败，避免影响主流程
+    }
+  };
 
   const handleCloseFloatingNotice = () => {
     if (!floatingNotice?.id) {
@@ -129,6 +148,7 @@ const Dashboard = () => {
       "dismissedFloatingNoticeIds",
       JSON.stringify(nextIds),
     );
+    markNoticeRead(floatingNotice);
     setFloatingNotice(null);
   };
 
@@ -433,7 +453,11 @@ const Dashboard = () => {
                 : ""}
             </span>
             <button
-              onClick={() => setActiveTab("notifications")}
+              onClick={async () => {
+                await markNoticeRead(floatingNotice);
+                setActiveTab("notifications");
+                setFloatingNotice(null);
+              }}
               style={{
                 border: "none",
                 backgroundColor: THEME.primary,

@@ -281,6 +281,16 @@ const expirePendingPresencePrompts = async (connection) => {
   );
 };
 
+// 处理长时间未响应的离座确认提示
+const expirePendingLeavePrompts = async (connection) => {
+  await connection.query(
+    `UPDATE reservation_leave_prompts
+     SET prompt_status = 'expired', responded_at = NOW()
+     WHERE prompt_status = 'pending'
+       AND created_at <= DATE_SUB(NOW(), INTERVAL 3 MINUTE)`,
+  );
+};
+
 // 中间件：验证JWT token
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers["authorization"];
@@ -884,6 +894,133 @@ router.post("/presence-prompts/:promptId/respond", authenticateToken, async (req
   }
 });
 
+// 用户响应“检测到你可能已离座，是否释放座位？”提示
+router.post("/leave-prompts/:promptId/respond", authenticateToken, async (req, res) => {
+  const promptId = Number(req.params.promptId);
+  const userId = req.user.userId;
+  const shouldRelease = req.body?.shouldRelease;
+
+  if (!Number.isInteger(promptId) || promptId <= 0) {
+    return res.status(400).json({ message: "无效的提示ID" });
+  }
+  if (typeof shouldRelease !== "boolean") {
+    return res.status(400).json({ message: "请提供 shouldRelease(true/false)" });
+  }
+
+  try {
+    const connection = await db;
+    await expireOverduePendingReservations(connection);
+    await expirePendingPresencePrompts(connection);
+    await expirePendingLeavePrompts(connection);
+
+    const tx = await connection.getConnection();
+    try {
+      await tx.beginTransaction();
+
+      const [rows] = await tx.query(
+        `SELECT p.prompt_id, p.prompt_status, p.reservation_id, p.seat_id,
+                r.res_status
+         FROM reservation_leave_prompts p
+         JOIN reservations r ON r.reservation_id = p.reservation_id
+         WHERE p.prompt_id = ? AND p.user_id = ?
+         LIMIT 1
+         FOR UPDATE`,
+        [promptId, userId],
+      );
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        await tx.rollback();
+        return res.status(404).json({ message: "该离座确认提示不存在或无权限操作" });
+      }
+
+      const prompt = rows[0];
+      if (prompt.prompt_status !== "pending") {
+        await tx.rollback();
+        return res.status(400).json({ message: "该离座确认提示已处理" });
+      }
+
+      if (shouldRelease) {
+        if (prompt.res_status === "active") {
+          await tx.query(
+            "UPDATE reservations SET res_status = 'completed', end_time = NOW() WHERE reservation_id = ?",
+            [prompt.reservation_id],
+          );
+          await tx.query("UPDATE seats SET status = 0 WHERE seat_id = ?", [prompt.seat_id]);
+        }
+
+        await tx.query(
+          "UPDATE reservation_leave_prompts SET prompt_status = 'released', responded_at = NOW() WHERE prompt_id = ?",
+          [promptId],
+        );
+        await tx.query(
+          `UPDATE reservation_leave_prompts
+           SET prompt_status = 'expired', responded_at = NOW()
+           WHERE reservation_id = ? AND prompt_status = 'pending' AND prompt_id <> ?`,
+          [prompt.reservation_id, promptId],
+        );
+
+        await upsertNotificationHistory(tx, {
+          userId,
+          eventType: "success",
+          title: "已释放座位",
+          message: "你已确认离开，系统已释放座位并结束本次预约。",
+          source: "leave-presence",
+          sourceKey: `leave-released-${promptId}`,
+          payload: {
+            promptId,
+            promptKind: "leave",
+            reservationId: prompt.reservation_id,
+            seatId: prompt.seat_id,
+            shouldRelease,
+          },
+        });
+
+        await tx.commit();
+        return res.json({ message: "已确认离开，座位已释放" });
+      }
+
+      await tx.query(
+        "UPDATE reservation_leave_prompts SET prompt_status = 'retained', responded_at = NOW() WHERE prompt_id = ?",
+        [promptId],
+      );
+      if (prompt.res_status === "active") {
+        await tx.query("UPDATE seats SET status = 2 WHERE seat_id = ?", [prompt.seat_id]);
+      }
+
+      await upsertNotificationHistory(tx, {
+        userId,
+        eventType: "info",
+        title: "已保留座位",
+        message: "你反馈为临时离开，系统将继续为你保留座位。",
+        source: "leave-presence",
+        sourceKey: `leave-retained-${promptId}`,
+        payload: {
+          promptId,
+          promptKind: "leave",
+          reservationId: prompt.reservation_id,
+          seatId: prompt.seat_id,
+          shouldRelease,
+        },
+      });
+
+      await tx.commit();
+      return res.json({ message: "已保留座位，祝你使用愉快" });
+    } catch (txError) {
+      try {
+        await tx.rollback();
+      } catch (rollbackErr) {
+        // ignore rollback error and return original tx error
+      }
+      throw txError;
+    } finally {
+      tx.release();
+    }
+  } catch (error) {
+    console.error("Respond leave prompt error:", error);
+    res.status(500).json({ message: "处理离座确认失败，请稍后重试" });
+  }
+});
+
 // 取消预约
 router.delete("/:reservationId", authenticateToken, async (req, res) => {
   const { reservationId } = req.params;
@@ -896,7 +1033,11 @@ router.delete("/:reservationId", authenticateToken, async (req, res) => {
 
     // 查找预约记录
     const [reservations] = await connection.query(
-      "SELECT * FROM reservations WHERE reservation_id = ? AND user_id = ? AND res_status = 'pending'",
+      `SELECT r.*, COALESCE(s.seat_number, CONCAT('已删除座位#', r.seat_id)) AS seat_number,
+              COALESCE(s.area, '历史区域') AS area
+       FROM reservations r
+       LEFT JOIN seats s ON s.seat_id = r.seat_id
+       WHERE r.reservation_id = ? AND r.user_id = ? AND r.res_status = 'pending'`,
       [reservationId, userId],
     );
 
@@ -921,12 +1062,14 @@ router.delete("/:reservationId", authenticateToken, async (req, res) => {
       userId,
       eventType: "info",
       title: "预约已取消",
-      message: `您在座位 #${reservation.seat_id} 的预约已取消。`,
+      message: `您在${reservation.area}${reservation.seat_number}的预约已取消。`,
       source: "reservation",
       sourceKey: `cancelled-${reservationId}`,
       payload: {
         reservationId,
         seatId: reservation.seat_id,
+        seatNumber: reservation.seat_number,
+        area: reservation.area,
       },
     });
 
@@ -948,7 +1091,11 @@ router.post("/:reservationId/checkin", authenticateToken, async (req, res) => {
     await expireOverduePendingReservations(connection);
 
     const [reservations] = await connection.query(
-      "SELECT * FROM reservations WHERE reservation_id = ? AND user_id = ? AND res_status = 'pending'",
+      `SELECT r.*, COALESCE(s.seat_number, CONCAT('已删除座位#', r.seat_id)) AS seat_number,
+              COALESCE(s.area, '历史区域') AS area
+       FROM reservations r
+       LEFT JOIN seats s ON s.seat_id = r.seat_id
+       WHERE r.reservation_id = ? AND r.user_id = ? AND r.res_status = 'pending'`,
       [reservationId, userId],
     );
 
@@ -978,12 +1125,14 @@ router.post("/:reservationId/checkin", authenticateToken, async (req, res) => {
       userId,
       eventType: "success",
       title: "已入座",
-      message: `您已在预约座位 #${reservation.seat_id} 完成入座签到，状态已更新。`,
+      message: `您已在${reservation.area}${reservation.seat_number}完成入座签到，状态已更新。`,
       source: "reservation",
       sourceKey: `checkin-${reservationId}`,
       payload: {
         reservationId,
         seatId: reservation.seat_id,
+        seatNumber: reservation.seat_number,
+        area: reservation.area,
       },
     });
 
@@ -1005,7 +1154,11 @@ router.post("/:reservationId/leave", authenticateToken, async (req, res) => {
     const connection = await db;
 
     const [reservations] = await connection.query(
-      "SELECT * FROM reservations WHERE reservation_id = ? AND user_id = ? AND res_status = 'active'",
+      `SELECT r.*, COALESCE(s.seat_number, CONCAT('已删除座位#', r.seat_id)) AS seat_number,
+              COALESCE(s.area, '历史区域') AS area
+       FROM reservations r
+       LEFT JOIN seats s ON s.seat_id = r.seat_id
+       WHERE r.reservation_id = ? AND r.user_id = ? AND r.res_status = 'active'`,
       [reservationId, userId],
     );
 
@@ -1045,12 +1198,14 @@ router.post("/:reservationId/leave", authenticateToken, async (req, res) => {
       userId,
       eventType: "info",
       title: "已离开，座位已释放",
-      message: `您在座位 #${reservation.seat_id} 的预约已完成，座位已释放。`,
+      message: `您在${reservation.area}${reservation.seat_number}的预约已完成，座位已释放。`,
       source: "reservation",
       sourceKey: `leave-${reservationId}`,
       payload: {
         reservationId,
         seatId: reservation.seat_id,
+        seatNumber: reservation.seat_number,
+        area: reservation.area,
       },
     });
 
@@ -1099,6 +1254,7 @@ router.get("/notifications", authenticateToken, async (req, res) => {
 
     await expireOverduePendingReservations(connection);
     await expirePendingPresencePrompts(connection);
+    await expirePendingLeavePrompts(connection);
 
     const [userRows] = await connection.query(
       "SELECT user_id, username, credit_score, status FROM users WHERE user_id = ? LIMIT 1",
@@ -1218,6 +1374,7 @@ router.get("/notifications", authenticateToken, async (req, res) => {
       const payload = parseNotificationPayload(row.payload_json);
       return {
         id: `history-${row.notification_id}`,
+        notificationId: Number(row.notification_id),
         type: row.event_type || "info",
         title: row.title,
         message: row.message,
@@ -1226,7 +1383,12 @@ router.get("/notifications", authenticateToken, async (req, res) => {
         source: row.source,
         sourceKey: row.source_key,
         isRead: Boolean(row.is_read),
-        action: payload?.promptId ? { promptId: payload.promptId } : undefined,
+        action: payload?.promptId
+          ? {
+              promptId: payload.promptId,
+              kind: payload.promptKind || (row.source === "leave-presence" ? "leave" : "presence"),
+            }
+          : undefined,
       };
     });
 
@@ -1234,6 +1396,54 @@ router.get("/notifications", authenticateToken, async (req, res) => {
   } catch (error) {
     console.error("Get notifications error:", error);
     res.status(500).json({ message: "获取消息提醒失败" });
+  }
+});
+
+// 标记消息已读（支持单条/批量/全部）
+router.patch("/notifications/read", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const markAll = Boolean(req.body?.markAll);
+  const notificationIdsRaw = Array.isArray(req.body?.notificationIds)
+    ? req.body.notificationIds
+    : [];
+  const notificationIds = notificationIdsRaw
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item > 0);
+
+  if (!markAll && notificationIds.length === 0) {
+    return res.status(400).json({ message: "请提供 notificationIds 或 markAll=true" });
+  }
+
+  try {
+    const connection = await db;
+
+    if (markAll) {
+      const [result] = await connection.query(
+        `UPDATE notification_history
+         SET is_read = 1, updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = ? AND is_read = 0`,
+        [userId],
+      );
+      return res.json({
+        message: "已全部标记为已读",
+        affectedRows: Number(result?.affectedRows || 0),
+      });
+    }
+
+    const [result] = await connection.query(
+      `UPDATE notification_history
+       SET is_read = 1, updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = ? AND notification_id IN (?)`,
+      [userId, notificationIds],
+    );
+
+    return res.json({
+      message: "已标记为已读",
+      affectedRows: Number(result?.affectedRows || 0),
+    });
+  } catch (error) {
+    console.error("Mark notifications read error:", error);
+    return res.status(500).json({ message: "标记已读失败" });
   }
 });
 

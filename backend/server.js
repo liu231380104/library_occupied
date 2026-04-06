@@ -64,11 +64,49 @@ const ITEM_DETECT_MODEL = process.env.ITEM_DETECT_MODEL || path.join(MODEL_DIR, 
 const SEAT_DETECT_CONF = Number(process.env.SEAT_DETECT_CONF || 0.35);
 const PYTHON_PATH = process.env.PYTHON_PATH || "";
 const PYTHON_EXECUTABLE = PYTHON_PATH || process.env.PYTHON || "python";
-const ENABLE_OCCUPATION_CRON = String(process.env.ENABLE_OCCUPATION_CRON || "false").toLowerCase() === "true";
+const ENABLE_OCCUPATION_CRON = String(process.env.ENABLE_OCCUPATION_CRON || "true").toLowerCase() === "true";
+const OCCUPATION_CRON_EXPR = process.env.OCCUPATION_CRON_EXPR || "*/20 * * * * *";
+const OCCUPATION_CRON_MAX_FRAMES = Number.isFinite(Number(process.env.OCCUPATION_CRON_MAX_FRAMES))
+  ? Math.max(30, Math.min(12000, Math.floor(Number(process.env.OCCUPATION_CRON_MAX_FRAMES))))
+  : 80;
+const OCCUPATION_CRON_DETECT_INTERVAL = Number.isFinite(Number(process.env.OCCUPATION_CRON_DETECT_INTERVAL))
+  ? Math.max(1, Math.min(30, Math.floor(Number(process.env.OCCUPATION_CRON_DETECT_INTERVAL))))
+  : 10;
 let detectionRunning = false;
+let detectionStartedAt = 0;
+let lastDetectionAt = 0;
+const detectionCursorByArea = new Map();
+const lastOccupiedByArea = new Map();
 const seatGenerationTasks = new Map();
 let latestOccupationResult = null;
 let presencePromptFeatureAvailable = true;
+let leavePromptFeatureAvailable = true;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForDetectionIdle(timeoutMs = 0) {
+  const startedAt = Date.now();
+
+  while (detectionRunning) {
+    const runningFor = Date.now() - detectionStartedAt;
+    if (runningFor > 10 * 60 * 1000) {
+      console.warn("检测锁已超时，自动释放占座检测锁");
+      detectionRunning = false;
+      detectionStartedAt = 0;
+      return true;
+    }
+
+    if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+      return false;
+    }
+
+    await sleep(500);
+  }
+
+  return true;
+}
 
 async function resolveSeatBaselineStatus(conn, seatId) {
   const [activeRows] = await conn.query(
@@ -110,6 +148,33 @@ async function ensurePresencePromptTable() {
     console.log("reservation_presence_prompts table ready");
   } catch (err) {
     console.warn("Unable to ensure reservation_presence_prompts table:", err.message || err);
+  }
+}
+
+async function ensureLeavePromptTable() {
+  try {
+    const db = require("./config/db");
+    const conn = await db;
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS reservation_leave_prompts (
+        prompt_id INT AUTO_INCREMENT PRIMARY KEY,
+        reservation_id INT NOT NULL,
+        user_id VARCHAR(20) NOT NULL,
+        seat_id INT NOT NULL,
+        prompt_status ENUM('pending', 'released', 'retained', 'expired') DEFAULT 'pending',
+        detected_at DATETIME NOT NULL,
+        responded_at DATETIME DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_leave_user_status (user_id, prompt_status, created_at),
+        INDEX idx_leave_reservation (reservation_id, prompt_status),
+        FOREIGN KEY (reservation_id) REFERENCES reservations(reservation_id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+        FOREIGN KEY (seat_id) REFERENCES seats(seat_id) ON DELETE CASCADE
+      )
+    `);
+    console.log("reservation_leave_prompts table ready");
+  } catch (err) {
+    console.warn("Unable to ensure reservation_leave_prompts table:", err.message || err);
   }
 }
 
@@ -322,6 +387,13 @@ app.get("/api/model/health", (req, res) => {
     pythonExecutable: PYTHON_EXECUTABLE,
     models: checks,
   }, "model api healthy");
+});
+
+app.get("/api/detection/status", (req, res) => {
+  res.json({
+    detectionRunning,
+    lastDetectionAt,
+  });
 });
 
 // 标准化模型推理接口：座位识别
@@ -556,10 +628,21 @@ app.post("/api/confirm-seats", async (req, res) => {
 app.post("/api/monitor-video", async (req, res) => {
   try {
     const requestedVideoPath = req.body?.videoPath || DEFAULT_TEST_VIDEO;
+    const requestedMaxFramesRaw = Number(req.body?.maxFrames);
+    const requestedDetectIntervalRaw = Number(req.body?.detectInterval);
+    const requestedMaxFrames =
+      Number.isFinite(requestedMaxFramesRaw) && requestedMaxFramesRaw > 0
+        ? Math.floor(Math.min(requestedMaxFramesRaw, 12000))
+        : 0;
+    const requestedDetectInterval =
+      Number.isFinite(requestedDetectIntervalRaw) && requestedDetectIntervalRaw > 0
+        ? Math.floor(Math.min(Math.max(requestedDetectIntervalRaw, 1), 30))
+        : (requestedMaxFrames === 0 ? 8 : 4);
     const seatMeta = loadSeatMeta();
     const videoPath = seatMeta?.videoPath || requestedVideoPath;
     const useCalibratedVideo = Boolean(seatMeta?.videoPath && seatMeta.videoPath !== requestedVideoPath);
-    const out = "results/live_sync.mp4";
+    const runId = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const out = `results/live_sync_${runId}.mp4`;
     const outputFps = Number(seatMeta?.sourceVideo?.fps) || 0;
 
     const pyArgs = [
@@ -570,9 +653,9 @@ app.post("/api/monitor-video", async (req, res) => {
       "--use-raw-seats",
       "--realtime-detect",
       "--detect-interval",
-      "4",
+      String(requestedDetectInterval),
       "--max-frames",
-      "300",
+      String(requestedMaxFrames),
     ];
     if (outputFps > 1) {
       pyArgs.push("--output-fps", String(outputFps));
@@ -582,7 +665,7 @@ app.post("/api/monitor-video", async (req, res) => {
     const { stdout, stderr, code } = await runPythonScriptWithTimeout(
       "stream_video.py",
       pyArgs,
-      180000,
+      requestedMaxFrames === 0 ? 600000 : 300000,
     );
 
     const lines = String(stdout || "")
@@ -602,9 +685,12 @@ app.post("/api/monitor-video", async (req, res) => {
       });
     }
 
+    const outVideoPath = String(last?.video?.out || out).replace(/\\/g, "/");
+    const outVideoName = outVideoPath.split("/").pop() || `live_sync_${runId}.mp4`;
+
     res.json({
       message: "监控视频生成完成",
-      videoUrl: `/python-assets/results/live_sync.mp4?t=${Date.now()}`,
+      videoUrl: `/python-assets/results/${outVideoName}?t=${Date.now()}`,
       videoPath,
       note: useCalibratedVideo
         ? `请求视频(${requestedVideoPath})与座位标定视频不一致，已自动使用标定视频(${videoPath})避免座位框漂移`
@@ -622,7 +708,25 @@ app.post("/api/detect-occupation", async (req, res) => {
   try {
     const videoPath = req.body?.videoPath || DEFAULT_TEST_VIDEO;
     const area = req.body?.area || "A区";
-    const result = await runSeatDetection({ videoPath, area, maxFrames: 300 });
+    const saveVideo = req.body?.saveVideo !== false;
+    const requestedMaxFramesRaw = Number(req.body?.maxFrames);
+    const requestedDetectIntervalRaw = Number(req.body?.detectInterval);
+    const requestedMaxFrames =
+      Number.isFinite(requestedMaxFramesRaw) && requestedMaxFramesRaw > 0
+        ? Math.floor(Math.min(requestedMaxFramesRaw, 12000))
+        : 0;
+    const requestedDetectInterval =
+      Number.isFinite(requestedDetectIntervalRaw) && requestedDetectIntervalRaw > 0
+        ? Math.floor(Math.min(Math.max(requestedDetectIntervalRaw, 1), 30))
+        : (requestedMaxFrames === 0 ? 8 : 4);
+    const result = await runSeatDetection({
+      videoPath,
+      area,
+      maxFrames: requestedMaxFrames,
+      detectInterval: requestedDetectInterval,
+      timeoutMs: requestedMaxFrames === 0 ? 600000 : 300000,
+      saveVideo,
+    });
     res.json({
       message: "占座检测完成",
       ...result,
@@ -640,30 +744,95 @@ app.get("/api/detect-occupation/latest", (req, res) => {
   res.json(latestOccupationResult);
 });
 
-// 定时任务：默认关闭，避免占用资源导致管理端识别超时
+// 定时任务：默认开启，按有预约的区域执行检测，支持离座提醒自动触发
+async function getDetectionAreasByReservationActivity() {
+  try {
+    const db = require("./config/db");
+    const conn = await db;
+    const [rows] = await conn.query(
+      `SELECT DISTINCT s.area
+       FROM reservations r
+       JOIN seats s ON s.seat_id = r.seat_id
+       WHERE r.res_status IN ('pending', 'active')
+         AND s.area IS NOT NULL
+         AND s.area <> ''
+       ORDER BY s.area ASC`,
+    );
+
+    const areas = (rows || [])
+      .map((row) => String(row.area || "").trim())
+      .filter(Boolean);
+
+    return areas.length > 0 ? areas : ["A区"];
+  } catch (err) {
+    console.warn("获取需检测区域失败，回退为 A区:", err.message || err);
+    return ["A区"];
+  }
+}
+
 if (ENABLE_OCCUPATION_CRON) {
-  cron.schedule("*/10 * * * * *", () => {
-    runSeatDetection({ videoPath: DEFAULT_TEST_VIDEO, area: "A区", maxFrames: 300 }).catch((e) => {
-      console.error("定时占座检测失败:", e);
-    });
+  cron.schedule(OCCUPATION_CRON_EXPR, async () => {
+    if (detectionRunning) {
+      console.log("Occupation cron skipped: detection already running");
+      return;
+    }
+
+    const areas = await getDetectionAreasByReservationActivity();
+
+    for (const area of areas) {
+      try {
+        const startFrame = Number(detectionCursorByArea.get(area)) || 0;
+        await runSeatDetection({
+          videoPath: DEFAULT_TEST_VIDEO,
+          area,
+          maxFrames: OCCUPATION_CRON_MAX_FRAMES,
+          detectInterval: OCCUPATION_CRON_DETECT_INTERVAL,
+          saveVideo: false,
+          startFrame,
+          advanceCursor: true,
+        });
+      } catch (e) {
+        console.error(`定时占座检测失败(area=${area}):`, e);
+      }
+    }
   });
-  console.log("Occupation cron enabled: every 10 seconds");
+  console.log(
+    `Occupation cron enabled: ${OCCUPATION_CRON_EXPR} for active/pending reservation areas `
+    + `(maxFrames=${OCCUPATION_CRON_MAX_FRAMES}, detectInterval=${OCCUPATION_CRON_DETECT_INTERVAL})`,
+  );
 } else {
   console.log("Occupation cron disabled (set ENABLE_OCCUPATION_CRON=true to enable)");
 }
 
-async function runSeatDetection({ videoPath, area = "A区", maxFrames = 300 }) {
+async function runSeatDetection({
+  videoPath,
+  area = "A区",
+  maxFrames = 0,
+  detectInterval = 8,
+  timeoutMs = 180000,
+  saveVideo = true,
+  startFrame = 0,
+  advanceCursor = false,
+}) {
   if (detectionRunning) {
-    throw new Error("占座检测仍在运行，请稍后重试");
+    const waited = await waitForDetectionIdle(5 * 60 * 1000);
+    if (!waited) {
+      throw new Error("占座检测仍在运行，请稍后重试");
+    }
   }
+
   detectionRunning = true;
+  detectionStartedAt = Date.now();
 
   const seatMeta = loadSeatMeta();
   const requestedVideoPath = videoPath;
   const effectiveVideoPath = seatMeta?.videoPath || videoPath;
   const usedCalibratedVideo = Boolean(seatMeta?.videoPath && seatMeta.videoPath !== requestedVideoPath);
-  const out = "results/occupation_latest.mp4";
+  const runId = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
   const outputFps = Number(seatMeta?.sourceVideo?.fps) || 0;
+  const startFrameNormalized = Number.isFinite(Number(startFrame)) && Number(startFrame) > 0
+    ? Math.floor(Number(startFrame))
+    : 0;
   const args = [
     "--video",
     effectiveVideoPath,
@@ -672,20 +841,36 @@ async function runSeatDetection({ videoPath, area = "A区", maxFrames = 300 }) {
     "--use-raw-seats",
     "--realtime-detect",
     "--detect-interval",
-    "4",
+    String(
+      Number.isFinite(Number(detectInterval)) && Number(detectInterval) > 0
+        ? Math.floor(Math.min(Math.max(Number(detectInterval), 1), 30))
+        : (Number(maxFrames) > 0 ? 4 : 8),
+    ),
     "--max-frames",
-    String(Math.max(1, Math.min(Number(maxFrames) || 120, 300))),
+    String(
+      Number.isFinite(Number(maxFrames)) && Number(maxFrames) > 0
+        ? Math.floor(Math.min(Number(maxFrames), 12000))
+        : 0,
+    ),
+    "--start-frame",
+    String(startFrameNormalized),
   ];
   if (outputFps > 1) {
     args.push("--output-fps", String(outputFps));
   }
-  args.push("--out", out);
+  let out = "";
+  if (saveVideo) {
+    out = `results/occupation_${runId}.mp4`;
+    args.push("--out", out);
+  }
 
   try {
     const { stdout, stderr, code } = await runPythonScriptWithTimeout(
       "stream_video.py",
       args,
-      180000,
+      Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+        ? Number(timeoutMs)
+        : 180000,
     );
 
     const lines = String(stdout || "")
@@ -727,8 +912,14 @@ async function runSeatDetection({ videoPath, area = "A区", maxFrames = 300 }) {
       .map((idx) => areaSeats[idx]?.seat_id)
       .filter((id) => Number.isInteger(id));
 
+    const prevOccupied = lastOccupiedByArea.get(area) || [];
+    const prevKey = JSON.stringify([...prevOccupied].sort((a, b) => a - b));
+    const currKey = JSON.stringify([...occupiedSeatIds].sort((a, b) => a - b));
+    const detectionChanged = prevKey !== currKey;
+    lastOccupiedByArea.set(area, [...occupiedSeatIds]);
+
     await conn.query(
-      "UPDATE seats SET status = CASE WHEN status = 1 THEN 1 ELSE 0 END WHERE area = ?",
+      "UPDATE seats SET status = CASE WHEN status IN (1, 2) THEN status ELSE 0 END WHERE area = ?",
       [area],
     );
 
@@ -815,13 +1006,128 @@ async function runSeatDetection({ videoPath, area = "A区", maxFrames = 300 }) {
       await conn.query("UPDATE seats SET status = 3 WHERE seat_id = ?", [seatId]);
     }
 
+    const occupiedSeatIdSet = new Set(occupiedSeatIds.map((id) => Number(id)));
+    const [activeSeatRows] = await conn.query(
+      `SELECT r.reservation_id, r.user_id, r.seat_id
+       FROM reservations r
+       JOIN seats s ON s.seat_id = r.seat_id
+       WHERE r.res_status = 'active' AND s.area = ?`,
+      [area],
+    );
+
+    for (const row of activeSeatRows || []) {
+      const seatId = Number(row.seat_id);
+      if (!Number.isInteger(seatId) || occupiedSeatIdSet.has(seatId)) {
+        continue;
+      }
+
+      await conn.query("UPDATE seats SET status = 2 WHERE seat_id = ?", [seatId]);
+
+      if (!leavePromptFeatureAvailable) {
+        continue;
+      }
+
+      try {
+        const [existingPrompts] = await conn.query(
+          `SELECT prompt_id
+           FROM reservation_leave_prompts
+           WHERE reservation_id = ?
+             AND prompt_status = 'pending'
+             AND created_at >= DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+           LIMIT 1`,
+          [row.reservation_id],
+        );
+
+        if (existingPrompts.length > 0) {
+          continue;
+        }
+
+        const [promptInsert] = await conn.query(
+          `INSERT INTO reservation_leave_prompts
+             (reservation_id, user_id, seat_id, prompt_status, detected_at)
+           VALUES (?, ?, ?, 'pending', NOW())`,
+          [row.reservation_id, row.user_id, seatId],
+        );
+
+        const [seatInfoRows] = await conn.query(
+          `SELECT seat_number, area
+           FROM seats
+           WHERE seat_id = ?
+           LIMIT 1`,
+          [seatId],
+        );
+        const seatInfo = seatInfoRows[0] || {
+          seat_number: String(seatId),
+          area: area || "未知区域",
+        };
+
+        await conn.query(
+          `INSERT INTO notification_history
+             (user_id, event_type, title, message, source, source_key, payload_json, is_read)
+           VALUES (?, 'question', ?, ?, 'leave-presence', ?, ?, 0)
+           ON DUPLICATE KEY UPDATE
+             event_type = VALUES(event_type),
+             title = VALUES(title),
+             message = VALUES(message),
+             payload_json = VALUES(payload_json),
+             is_read = 0,
+             updated_at = CURRENT_TIMESTAMP`,
+          [
+            row.user_id,
+            "检测到你可能已离座",
+            `系统检测到你在${seatInfo.area}${seatInfo.seat_number}的座位暂时无人，是否确认离开并释放座位？`,
+            `leave-created-${row.reservation_id}`,
+            JSON.stringify({
+              promptId: promptInsert.insertId,
+              promptKind: "leave",
+              reservationId: row.reservation_id,
+              seatId,
+              seatNumber: seatInfo.seat_number,
+              area: seatInfo.area,
+              userId: row.user_id,
+            }),
+          ],
+        );
+      } catch (promptErr) {
+        if (promptErr?.code === "ER_NO_SUCH_TABLE") {
+          leavePromptFeatureAvailable = false;
+          console.warn("reservation_leave_prompts 表不存在，离座确认提示功能已暂时禁用。请执行对应迁移脚本。");
+        } else {
+          console.warn("创建离座确认提示失败:", promptErr.message || promptErr);
+        }
+      }
+    }
+
+    const outVideoPath = String(result?.video?.out || out).replace(/\\/g, "/");
+    const outVideoName = outVideoPath ? outVideoPath.split("/").pop() : "";
+    const sourceStartFrame = Number(result?.source?.startFrame);
+    const sourceProcessedFrames = Number(result?.source?.processedFrames);
+    const sourceTotalFrames = Number(result?.source?.totalFrames);
+    let nextStartFrame = Number.isFinite(sourceStartFrame) ? sourceStartFrame : startFrameNormalized;
+    if (Number.isFinite(sourceProcessedFrames) && sourceProcessedFrames > 0) {
+      nextStartFrame += Math.floor(sourceProcessedFrames);
+    }
+    if (Number.isFinite(sourceTotalFrames) && sourceTotalFrames > 0) {
+      nextStartFrame = nextStartFrame % Math.floor(sourceTotalFrames);
+    }
+    if (advanceCursor) {
+      detectionCursorByArea.set(area, Math.max(0, nextStartFrame));
+    }
+
     const payload = {
       area,
       videoPath: effectiveVideoPath,
       requestedVideoPath,
       occupiedSeatIds,
       occupiedIndexes,
-      videoUrl: `/python-assets/results/occupation_latest.mp4?t=${Date.now()}`,
+      detectionWindow: {
+        startFrame: Number.isFinite(sourceStartFrame) ? sourceStartFrame : startFrameNormalized,
+        processedFrames: Number.isFinite(sourceProcessedFrames) ? sourceProcessedFrames : null,
+        totalFrames: Number.isFinite(sourceTotalFrames) ? sourceTotalFrames : null,
+        nextStartFrame,
+      },
+      detectionChanged,
+      videoUrl: outVideoName ? `/python-assets/results/${outVideoName}?t=${Date.now()}` : undefined,
       videoMeta: result?.video || null,
       detectedAt: Date.now(),
       note: usedCalibratedVideo
@@ -832,17 +1138,29 @@ async function runSeatDetection({ videoPath, area = "A区", maxFrames = 300 }) {
         item: ITEM_DETECT_MODEL.replace(/\\/g, "/"),
       },
     };
-    latestOccupationResult = payload;
-    console.log("占座检测完成，occupiedSeatIds:", occupiedSeatIds);
+    lastDetectionAt = Date.now();
+    if (saveVideo) {
+      latestOccupationResult = payload;
+    }
+    console.log(
+      "占座检测完成，occupiedSeatIds:",
+      occupiedSeatIds,
+      "changed:",
+      detectionChanged,
+      "window:",
+      payload.detectionWindow,
+    );
     return payload;
   } finally {
     detectionRunning = false;
+    detectionStartedAt = 0;
   }
 }
 
 // 启动服务器
 (async () => {
   await ensurePresencePromptTable();
+  await ensureLeavePromptTable();
   await ensureNotificationHistoryTable();
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

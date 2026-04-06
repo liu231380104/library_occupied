@@ -66,11 +66,12 @@ def main():
     p.add_argument('--video', required=True, help='视频文件路径或摄像头索引')
     p.add_argument('--seats', default='seats.json', help='座位 json 路径')
     p.add_argument('--use-raw-seats', action='store_true', help='直接使用 seats.json 的原始坐标（不按视频缩放）')
-    p.add_argument('--out', default='results/live_out.mp4', help='输出视频路径')
+    p.add_argument('--out', default='', help='输出视频路径，留空则只检测不生成视频')
     p.add_argument('--show', action='store_true', help='显示实时窗口')
     p.add_argument('--conf', type=float, default=0.4)
     p.add_argument('--occupy-thr', type=int, default=3, help='判定为占座所需连续帧数')
     p.add_argument('--max-frames', type=int, default=0, help='处理的最大帧数（0 表示全部）')
+    p.add_argument('--start-frame', type=int, default=0, help='起始帧索引（用于分段检测）')
     p.add_argument('--imgsz', type=int, default=1280)
     p.add_argument('--output-fps', type=float, default=0.0, help='输出视频FPS，<=0时使用源视频FPS')
     p.add_argument('--realtime-detect', action='store_true', help='实时逐帧检测并显示占座状态')
@@ -102,8 +103,22 @@ def main():
             print(json.dumps({"error": "无法打开视频或摄像头"}))
             return
 
-    # 先读取首帧，避免宽高/FPS元数据异常导致输出视频时长为0或文件不可播放
+    total_frames_meta = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    start_frame = int(args.start_frame or 0)
+    if start_frame < 0:
+        start_frame = 0
+    if total_frames_meta > 0 and start_frame >= total_frames_meta:
+        start_frame = start_frame % total_frames_meta
+    if start_frame > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, float(start_frame))
+
+    # 读取起始帧，失败时回退到首帧再试一次
     ret_first, first_frame = cap.read()
+    if (not ret_first or first_frame is None) and start_frame > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0.0)
+        start_frame = 0
+        ret_first, first_frame = cap.read()
+
     if not ret_first or first_frame is None:
         cap.release()
         print(json.dumps({"error": "视频没有可读取帧，无法生成检测视频"}))
@@ -135,7 +150,10 @@ def main():
         seats = scaled_seats
     else:
         print(json.dumps({"info": "使用原始 seats.json 坐标（未缩放）"}))
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    writer = None
+    codec_used = ""
+    if args.out:
+        os.makedirs(os.path.dirname(args.out), exist_ok=True)
 
     # 仅在显式开启时输出调试图，默认关闭以减少IO开销
     if args.debug_frame:
@@ -147,11 +165,12 @@ def main():
                 cv2.putText(debug_frame, f"Seat {i + 1}", (x1, max(15, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             cv2.imwrite("debug_frame.jpg", debug_frame)
 
-    writer, codec_used = create_video_writer(args.out, fps, w, h)
-    if writer is None:
-        cap.release()
-        print(json.dumps({"error": f"无法创建输出视频: {args.out}"}))
-        return
+    if args.out:
+        writer, codec_used = create_video_writer(args.out, fps, w, h)
+        if writer is None:
+            cap.release()
+            print(json.dumps({"error": f"无法创建输出视频: {args.out}"}))
+            return
 
     frame_idx = 0
     frames_written = 0
@@ -205,7 +224,8 @@ def main():
             cv2.putText(frame, label, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4)
             cv2.putText(frame, label, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
-        writer.write(frame)
+        if writer is not None:
+            writer.write(frame)
         frames_written += 1
         if args.show:
             cv2.imshow('Live', frame)
@@ -217,7 +237,8 @@ def main():
         frame = next_frame if ret else None
 
     cap.release()
-    writer.release()
+    if writer is not None:
+        writer.release()
     if args.show:
         cv2.destroyAllWindows()
 
@@ -231,15 +252,23 @@ def main():
         "occupiedIndices": occupied_indices,
         # 兼容旧接口：仍返回1-based occupied
         "occupied": [i + 1 for i in occupied_indices],
-        "video": {
+        "source": {
+            "startFrame": int(start_frame),
+            "processedFrames": int(frames_written),
+            "endFrame": int(start_frame + max(frames_written - 1, 0)),
+            "totalFrames": int(total_frames_meta) if total_frames_meta > 0 else 0,
+            "fps": float(fps),
+        },
+    }
+    if args.out:
+        result["video"] = {
             "out": args.out,
             "codec": codec_used,
             "framesWritten": frames_written,
             "fps": fps,
             "durationSec": round(frames_written / max(fps, 1), 2),
             "size": {"width": w, "height": h},
-        },
-    }
+        }
     print(json.dumps(result))
 
 

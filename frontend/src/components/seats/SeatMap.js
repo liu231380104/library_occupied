@@ -46,6 +46,8 @@ const SeatMap = () => {
   const [autoReserveMode, setAutoReserveMode] = useState("balanced");
   const [strictQuietMode, setStrictQuietMode] = useState(true);
   const [autoReserveHint, setAutoReserveHint] = useState("");
+  const [previewCacheKey, setPreviewCacheKey] = useState(Date.now());
+  const [lastDetectionAt, setLastDetectionAt] = useState(null);
 
   useEffect(() => {
     // 从 token 解析 role
@@ -77,15 +79,50 @@ const SeatMap = () => {
   const fetchSeats = async (area) => {
     try {
       const response = area
-        ? await api.get("/seats", { params: { area } })
-        : await api.get("/seats");
+        ? await api.get("/seats", { params: { area, _: Date.now() } })
+        : await api.get("/seats", { params: { _: Date.now() } });
       setSeats(response.data);
+      setPreviewCacheKey(Date.now());
       setLoading(false);
     } catch (err) {
       setError("获取座位信息失败");
       setLoading(false);
     }
   };
+
+  const fetchDetectionStatus = async () => {
+    try {
+      const response = await api.get("/detection/status", { params: { _: Date.now() } });
+      const ts = Number(response?.data?.lastDetectionAt);
+      setLastDetectionAt(Number.isFinite(ts) && ts > 0 ? ts : null);
+    } catch (err) {
+      setLastDetectionAt(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedArea) return undefined;
+
+    let polling = false;
+
+    const refreshSeatsOnly = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        await Promise.all([fetchSeats(selectedArea), fetchDetectionStatus()]);
+      } finally {
+        polling = false;
+      }
+    };
+
+    refreshSeatsOnly();
+
+    const timer = setInterval(() => {
+      refreshSeatsOnly();
+    }, 10000);
+
+    return () => clearInterval(timer);
+  }, [selectedArea]);
 
   const handleAreaChange = (e) => {
     const area = e.target.value;
@@ -129,15 +166,21 @@ const SeatMap = () => {
     return "#ffffff";
   };
 
-  const toAbsoluteAssetUrl = (rawUrl) => {
+  const toAbsoluteAssetUrl = (rawUrl, cacheKey) => {
     if (!rawUrl || typeof rawUrl !== "string") return "";
-    if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
+    const withCache = (url) => {
+      if (!cacheKey) return url;
+      const sep = url.includes("?") ? "&" : "?";
+      return `${url}${sep}t=${cacheKey}`;
+    };
+
+    if (/^https?:\/\//i.test(rawUrl)) return withCache(rawUrl);
     const normalized = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
-    return `http://localhost:5000${normalized}`;
+    return withCache(`http://localhost:5000${normalized}`);
   };
 
   const seatWithPreview = seats.find((seat) => seat?.seat_preview_url);
-  const seatMapPreviewUrl = toAbsoluteAssetUrl(seatWithPreview?.seat_preview_url);
+  const seatMapPreviewUrl = toAbsoluteAssetUrl(seatWithPreview?.seat_preview_url, previewCacheKey);
   const seatMapNaturalWidth = Number(seatWithPreview?.seat_preview_size?.width) || 1280;
   const seatMapNaturalHeight = Number(seatWithPreview?.seat_preview_size?.height) || 720;
   const seatMapDisplayWidth = 520;
@@ -372,6 +415,9 @@ const SeatMap = () => {
         <h2 style={{ margin: 0 }}>
           {selectedArea ? `${selectedArea}座位图` : "座位图"}
         </h2>
+        <div style={{ color: THEME.mutedText, fontSize: "13px", marginLeft: "auto", marginRight: "8px" }}>
+          最近识别：{lastDetectionAt ? new Date(lastDetectionAt).toLocaleTimeString("zh-CN") : "尚未检测"}
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <label htmlFor="seat-area-select">区域：</label>
           <select

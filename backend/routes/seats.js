@@ -67,6 +67,10 @@ router.get("/areas", async (req, res) => {
 router.get("/", async (req, res) => {
   const { area } = req.query;
   try {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+
     const connection = await db;
     const seatMeta = loadSeatMeta();
     const seatBoxes = Array.isArray(seatMeta?.seats) && seatMeta.seats.length > 0
