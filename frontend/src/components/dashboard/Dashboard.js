@@ -25,6 +25,32 @@ const THEME = {
   muted: "#646d6e",
 };
 
+function getNoticeTtlMs(item) {
+  const source = String(item?.source || "");
+  const sourceKey = String(item?.sourceKey || "");
+  const type = String(item?.type || "");
+
+  if (source === "reservation" && sourceKey.startsWith("pending-")) {
+    return 20 * 60 * 1000;
+  }
+  if (source === "reservation" && (sourceKey.startsWith("created-") || sourceKey.startsWith("auto-created-"))) {
+    return 30 * 60 * 1000;
+  }
+  if (source === "presence" || source === "leave-presence" || type === "question") {
+    return 3 * 60 * 60 * 1000;
+  }
+  if (source === "credit") {
+    return 24 * 60 * 60 * 1000;
+  }
+  return 12 * 60 * 60 * 1000;
+}
+
+function isFreshFloatingNotice(item) {
+  const createdAt = new Date(item?.createdAt || 0).getTime();
+  if (!Number.isFinite(createdAt) || createdAt <= 0) return false;
+  return Date.now() - createdAt <= getNoticeTtlMs(item);
+}
+
 const Dashboard = () => {
   const [role, setRole] = useState(null);
   const [username, setUsername] = useState("");
@@ -108,7 +134,9 @@ const Dashboard = () => {
         const response = await api.get("/reservations/notifications");
         const list = response.data || [];
         const visible = list.find(
-          (item) => !item.isRead && !dismissedNoticeIds.includes(item.id),
+          (item) => !item.isRead
+            && !dismissedNoticeIds.includes(item.id)
+            && isFreshFloatingNotice(item),
         );
         setFloatingNotice(visible || null);
       } catch (error) {

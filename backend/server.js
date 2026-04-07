@@ -1052,13 +1052,13 @@ async function runSeatDetection({
                      title = VALUES(title),
                      message = VALUES(message),
                      payload_json = VALUES(payload_json),
-                     is_read = 0,
+                     is_read = notification_history.is_read,
                      updated_at = CURRENT_TIMESTAMP`,
                   [
                     activeReservations[0].user_id,
                     "检测到你可能离开座位",
                     `系统检测到你在${area}${seatRow.seat_number}的座位桌面仍有物品。请确认你是否暂时离开、稍后还会回来。`,
-                    `leave-created-${activeReservations[0].reservation_id}`,
+                    `leave-created-${promptInsert.insertId}`,
                     JSON.stringify({
                       promptId: promptInsert.insertId,
                       promptKind: "leave",
@@ -1106,7 +1106,7 @@ async function runSeatDetection({
                    title = VALUES(title),
                    message = VALUES(message),
                    payload_json = VALUES(payload_json),
-                   is_read = 0,
+                   is_read = notification_history.is_read,
                    updated_at = CURRENT_TIMESTAMP`,
                 [
                   activeReservations[0].user_id,
@@ -1170,13 +1170,13 @@ async function runSeatDetection({
                    title = VALUES(title),
                    message = VALUES(message),
                    payload_json = VALUES(payload_json),
-                   is_read = 0,
+                   is_read = notification_history.is_read,
                    updated_at = CURRENT_TIMESTAMP`,
                 [
                   pending.user_id,
                   "检测到有人入座",
                   `系统检测到你预约的座位 ${seatId} 已有人入座，是否为你本人？`,
-                  `presence-created-${pending.reservation_id}`,
+                  `presence-created-${promptInsert.insertId}`,
                   JSON.stringify({
                     promptId: promptInsert.insertId,
                     reservationId: pending.reservation_id,
@@ -1267,13 +1267,13 @@ async function runSeatDetection({
              title = VALUES(title),
              message = VALUES(message),
              payload_json = VALUES(payload_json),
-             is_read = 0,
+             is_read = notification_history.is_read,
              updated_at = CURRENT_TIMESTAMP`,
           [
             row.user_id,
             "检测到你可能已离座",
             `系统检测到你在${seatInfo.area}${seatInfo.seat_number}的座位暂时无人，是否确认离开并释放座位？`,
-            `leave-created-${row.reservation_id}`,
+            `leave-created-${promptInsert.insertId}`,
             JSON.stringify({
               promptId: promptInsert.insertId,
               promptKind: "leave",

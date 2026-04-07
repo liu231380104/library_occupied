@@ -207,7 +207,7 @@ async function upsertNotificationHistory(connection, {
        title = VALUES(title),
        message = VALUES(message),
        payload_json = VALUES(payload_json),
-       is_read = 0,
+       is_read = notification_history.is_read,
        updated_at = CURRENT_TIMESTAMP`,
     [userId, eventType, title, message, source, sourceKey, buildNotificationPayload(payload)],
   );
@@ -1315,20 +1315,6 @@ router.get("/notifications", authenticateToken, async (req, res) => {
       [userId],
     );
 
-    // 2) 最近24小时内的违规提醒
-    const [violatedRows] = await connection.query(
-      `SELECT r.reservation_id, r.end_time,
-              COALESCE(s.seat_number, CONCAT('已删除座位#', r.seat_id)) AS seat_number,
-              COALESCE(s.area, '历史区域') AS area
-       FROM reservations r
-       LEFT JOIN seats s ON r.seat_id = s.seat_id
-       WHERE r.user_id = ?
-         AND r.res_status = 'violated'
-         AND r.end_time >= DATE_SUB(NOW(), INTERVAL 1 DAY)
-       ORDER BY r.end_time DESC`,
-      [userId],
-    );
-
     const reminders = pendingRows.map((row) => {
       const remain = Math.max(0, 15 - Number(row.elapsed_minutes || 0));
       return {
@@ -1339,14 +1325,6 @@ router.get("/notifications", authenticateToken, async (req, res) => {
         createdAt: row.start_time,
       };
     });
-
-    const violatedAlerts = violatedRows.map((row) => ({
-      id: `violated-${row.reservation_id}`,
-      type: "danger",
-      title: "预约已违规",
-      message: `您在${row.area}${row.seat_number}的预约超过15分钟未签到，系统已判定违规并扣除5信誉分。`,
-      createdAt: row.end_time,
-    }));
 
     for (const reminder of reminders) {
       await upsertNotificationHistory(connection, {
@@ -1364,22 +1342,6 @@ router.get("/notifications", authenticateToken, async (req, res) => {
       });
     }
 
-    for (const violatedAlert of violatedAlerts) {
-      await upsertNotificationHistory(connection, {
-        userId,
-        eventType: violatedAlert.type,
-        title: violatedAlert.title,
-        message: violatedAlert.message,
-        source: "reservation",
-        sourceKey: violatedAlert.id,
-        payload: {
-          kind: "violated",
-          createdAt: violatedAlert.createdAt,
-          message: violatedAlert.message,
-        },
-      });
-    }
-
     if (lowCreditReminder) {
       await upsertNotificationHistory(connection, {
         userId,
@@ -1387,7 +1349,7 @@ router.get("/notifications", authenticateToken, async (req, res) => {
         title: lowCreditReminder.title,
         message: lowCreditReminder.message,
         source: "credit",
-        sourceKey: `credit-${userId}`,
+        sourceKey: lowCreditReminder.id || `credit-${userId}`,
         payload: lowCreditReminder,
       });
     }
