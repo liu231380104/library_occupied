@@ -64,7 +64,7 @@ const ITEM_DETECT_MODEL = process.env.ITEM_DETECT_MODEL || path.join(MODEL_DIR, 
 const SEAT_DETECT_CONF = Number(process.env.SEAT_DETECT_CONF || 0.35);
 const PYTHON_PATH = process.env.PYTHON_PATH || "";
 const PYTHON_EXECUTABLE = PYTHON_PATH || process.env.PYTHON || "python";
-const ENABLE_OCCUPATION_CRON = String(process.env.ENABLE_OCCUPATION_CRON || "true").toLowerCase() === "true";
+const ENABLE_OCCUPATION_CRON = String(process.env.ENABLE_OCCUPATION_CRON || "false").toLowerCase() === "true";
 const OCCUPATION_CRON_EXPR = process.env.OCCUPATION_CRON_EXPR || "*/20 * * * * *";
 const OCCUPATION_CRON_MAX_FRAMES = Number.isFinite(Number(process.env.OCCUPATION_CRON_MAX_FRAMES))
   ? Math.max(30, Math.min(12000, Math.floor(Number(process.env.OCCUPATION_CRON_MAX_FRAMES))))
@@ -72,6 +72,7 @@ const OCCUPATION_CRON_MAX_FRAMES = Number.isFinite(Number(process.env.OCCUPATION
 const OCCUPATION_CRON_DETECT_INTERVAL = Number.isFinite(Number(process.env.OCCUPATION_CRON_DETECT_INTERVAL))
   ? Math.max(1, Math.min(30, Math.floor(Number(process.env.OCCUPATION_CRON_DETECT_INTERVAL))))
   : 10;
+const LEAVE_ITEM_TIMEOUT_MINUTES = Number(process.env.LEAVE_ITEM_TIMEOUT_MINUTES || 15);
 let detectionRunning = false;
 let detectionStartedAt = 0;
 let lastDetectionAt = 0;
@@ -855,8 +856,15 @@ async function runSeatDetection({
 
   const seatMeta = loadSeatMeta();
   const requestedVideoPath = videoPath;
-  const effectiveVideoPath = seatMeta?.videoPath || videoPath;
-  const usedCalibratedVideo = Boolean(seatMeta?.videoPath && seatMeta.videoPath !== requestedVideoPath);
+  const calibratedVideoPath = typeof seatMeta?.videoPath === "string"
+    ? seatMeta.videoPath.trim()
+    : "";
+  const calibratedVideoExists = Boolean(calibratedVideoPath) && fs.existsSync(calibratedVideoPath);
+  const effectiveVideoPath = calibratedVideoExists ? calibratedVideoPath : videoPath;
+  const usedCalibratedVideo = Boolean(calibratedVideoExists && calibratedVideoPath !== requestedVideoPath);
+  const missingCalibratedVideoNote = calibratedVideoPath && !calibratedVideoExists
+    ? `座位标定视频(${calibratedVideoPath})不存在，已回退为请求视频(${requestedVideoPath})`
+    : "";
   const runId = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
   const outputFps = Number(seatMeta?.sourceVideo?.fps) || 0;
   const startFrameNormalized = Number.isFinite(Number(startFrame)) && Number(startFrame) > 0
@@ -983,16 +991,143 @@ async function runSeatDetection({
     for (const seatId of occupiedSeatIds) {
       const seatIndex = occupiedIndexes.find((idx) => areaSeats[idx]?.seat_id === seatId);
       const seatState = Number.isInteger(seatIndex) ? seatStateByIndex.get(seatIndex) || null : null;
+      const seatRow = areaSeats[seatIndex] || null;
       const hasPerson = Boolean(seatState?.hasPerson);
+      const hasItem = Boolean(seatState?.hasItem);
 
       const [activeReservations] = await conn.query(
-        "SELECT 1 FROM reservations WHERE seat_id = ? AND res_status = 'active' LIMIT 1",
+        "SELECT reservation_id, user_id FROM reservations WHERE seat_id = ? AND res_status = 'active' ORDER BY created_at DESC LIMIT 1",
         [seatId],
       );
 
       if (activeReservations.length > 0) {
         // 座位被占用且有活跃预约 -> 已占用
         await conn.query("UPDATE seats SET status = 2 WHERE seat_id = ?", [seatId]);
+
+        if (hasPerson) {
+          await conn.query("UPDATE seats SET item_occupied_since = NULL WHERE seat_id = ?", [seatId]);
+          continue;
+        }
+
+        if (hasItem && seatRow) {
+          const [seatRows] = await conn.query(
+            "SELECT item_occupied_since FROM seats WHERE seat_id = ? LIMIT 1",
+            [seatId],
+          );
+          const itemOccupiedSince = seatRows[0]?.item_occupied_since || null;
+
+          if (!itemOccupiedSince) {
+            await conn.query(
+              "UPDATE seats SET item_occupied_since = COALESCE(item_occupied_since, NOW()) WHERE seat_id = ?",
+              [seatId],
+            );
+          }
+
+          if (leavePromptFeatureAvailable) {
+            try {
+              const [existingPrompts] = await conn.query(
+                `SELECT prompt_id
+                 FROM reservation_leave_prompts
+                 WHERE reservation_id = ?
+                   AND prompt_status = 'pending'
+                   AND created_at >= DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+                 LIMIT 1`,
+                [activeReservations[0].reservation_id],
+              );
+
+              if (existingPrompts.length === 0) {
+                const [promptInsert] = await conn.query(
+                  `INSERT INTO reservation_leave_prompts
+                     (reservation_id, user_id, seat_id, prompt_status, detected_at)
+                   VALUES (?, ?, ?, 'pending', NOW())`,
+                  [activeReservations[0].reservation_id, activeReservations[0].user_id, seatId],
+                );
+
+                await conn.query(
+                  `INSERT INTO notification_history
+                     (user_id, event_type, title, message, source, source_key, payload_json, is_read)
+                   VALUES (?, 'question', ?, ?, 'leave-presence', ?, ?, 0)
+                   ON DUPLICATE KEY UPDATE
+                     event_type = VALUES(event_type),
+                     title = VALUES(title),
+                     message = VALUES(message),
+                     payload_json = VALUES(payload_json),
+                     is_read = 0,
+                     updated_at = CURRENT_TIMESTAMP`,
+                  [
+                    activeReservations[0].user_id,
+                    "检测到你可能离开座位",
+                    `系统检测到你在${area}${seatRow.seat_number}的座位桌面仍有物品。请确认你是否暂时离开、稍后还会回来。`,
+                    `leave-created-${activeReservations[0].reservation_id}`,
+                    JSON.stringify({
+                      promptId: promptInsert.insertId,
+                      promptKind: "leave",
+                      reservationId: activeReservations[0].reservation_id,
+                      seatId,
+                      seatNumber: seatRow.seat_number,
+                      area,
+                      userId: activeReservations[0].user_id,
+                    }),
+                  ],
+                );
+              }
+            } catch (promptErr) {
+              if (promptErr?.code === "ER_NO_SUCH_TABLE") {
+                leavePromptFeatureAvailable = false;
+                console.warn("reservation_leave_prompts 表不存在，离座确认提示功能已暂时禁用。请执行对应迁移脚本。");
+              } else {
+                console.warn("创建离座确认提示失败:", promptErr.message || promptErr);
+              }
+            }
+          }
+
+          const startedAtMs = itemOccupiedSince ? new Date(itemOccupiedSince).getTime() : Date.now();
+          const timeoutMs = Math.max(1, LEAVE_ITEM_TIMEOUT_MINUTES) * 60 * 1000;
+
+          if (Date.now() - startedAtMs >= timeoutMs) {
+            const sourceKey = `leave-timeout-${seatId}-${startedAtMs}`;
+            const [existingRows] = await conn.query(
+              `SELECT notification_id
+               FROM notification_history
+               WHERE user_id = ?
+                 AND source = 'leave-timeout'
+                 AND source_key = ?
+               LIMIT 1`,
+              [activeReservations[0].user_id, sourceKey],
+            );
+
+            if (existingRows.length === 0) {
+              await conn.query(
+                `INSERT INTO notification_history
+                   (user_id, event_type, title, message, source, source_key, payload_json, is_read)
+                 VALUES (?, 'danger', ?, ?, 'leave-timeout', ?, ?, 0)
+                 ON DUPLICATE KEY UPDATE
+                   event_type = VALUES(event_type),
+                   title = VALUES(title),
+                   message = VALUES(message),
+                   payload_json = VALUES(payload_json),
+                   is_read = 0,
+                   updated_at = CURRENT_TIMESTAMP`,
+                [
+                  activeReservations[0].user_id,
+                  "离座超时违规",
+                  `系统检测到你在${area}${seatRow.seat_number}离开后桌面物品已持续超过${LEAVE_ITEM_TIMEOUT_MINUTES}分钟，请尽快返回；否则将判定为违规并释放座位。`,
+                  sourceKey,
+                  JSON.stringify({
+                    reservationId: activeReservations[0].reservation_id,
+                    seatId,
+                    seatNumber: seatRow.seat_number,
+                    area,
+                    itemOccupiedSince: itemOccupiedSince || new Date(startedAtMs).toISOString(),
+                    timeoutMinutes: LEAVE_ITEM_TIMEOUT_MINUTES,
+                  }),
+                ],
+              );
+
+              await conn.query("UPDATE seats SET status = 3 WHERE seat_id = ?", [seatId]);
+            }
+          }
+        }
         continue;
       }
 
@@ -1082,6 +1217,7 @@ async function runSeatDetection({
         continue;
       }
 
+      await conn.query("UPDATE seats SET item_occupied_since = NULL WHERE seat_id = ?", [seatId]);
       await conn.query("UPDATE seats SET status = 2 WHERE seat_id = ?", [seatId]);
 
       if (!leavePromptFeatureAvailable) {
@@ -1193,7 +1329,7 @@ async function runSeatDetection({
       detectedAt: Date.now(),
       note: usedCalibratedVideo
         ? `请求视频(${requestedVideoPath})与座位标定视频不一致，已自动使用标定视频(${effectiveVideoPath})避免座位框漂移`
-        : undefined,
+        : (missingCalibratedVideoNote || undefined),
       models: {
         person: PERSON_DETECT_MODEL.replace(/\\/g, "/"),
         item: ITEM_DETECT_MODEL.replace(/\\/g, "/"),

@@ -21,6 +21,8 @@ const THEME = {
   },
 };
 
+const LEAVE_ITEM_TIMEOUT_MINUTES = 15;
+
 const SeatMap = () => {
   const [role, setRole] = useState(null);
   const [areas, setAreas] = useState([]);
@@ -229,6 +231,31 @@ const SeatMap = () => {
     const minutes = Math.floor((elapsedSeconds % 3600) / 60);
     const seconds = elapsedSeconds % 60;
     const pad = (value) => String(value).padStart(2, "0");
+
+    if (hours > 0) {
+      return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+    }
+
+    return `${pad(minutes)}:${pad(seconds)}`;
+  };
+
+  const formatItemLeaveCountdown = (startedAt) => {
+    if (!startedAt) return "";
+
+    const startedMs = new Date(startedAt).getTime();
+    if (!Number.isFinite(startedMs)) return "";
+
+    const timeoutMs = LEAVE_ITEM_TIMEOUT_MINUTES * 60 * 1000;
+    const remainingMs = timeoutMs - (nowTs - startedMs);
+    const remainingSeconds = Math.max(0, Math.floor(remainingMs / 1000));
+    const hours = Math.floor(remainingSeconds / 3600);
+    const minutes = Math.floor((remainingSeconds % 3600) / 60);
+    const seconds = remainingSeconds % 60;
+    const pad = (value) => String(value).padStart(2, "0");
+
+    if (remainingMs <= 0) {
+      return "已超时";
+    }
 
     if (hours > 0) {
       return `${hours}:${pad(minutes)}:${pad(seconds)}`;
@@ -880,7 +907,12 @@ const SeatMap = () => {
                             lineHeight: 1.2,
                           }}
                         >
-                          物品占座 {formatItemOccupancyDuration(seat.item_occupied_since)}
+                          {(() => {
+                            const countdown = formatItemLeaveCountdown(seat.item_occupied_since);
+                            return countdown === "已超时"
+                              ? `离座超时 ${countdown}`
+                              : `离座保留 ${countdown}`;
+                          })()}
                         </div>
                       )}
                       <span

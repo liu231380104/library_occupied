@@ -14,6 +14,7 @@ const THEME = {
 };
 
 const PREVIEW_MEDIA_MAX_WIDTH = 1200;
+const LEAVE_ITEM_TIMEOUT_MINUTES = 15;
 
 const normalizeMonitorVideoUrl = (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== "string") return "";
@@ -38,8 +39,11 @@ const AdminSeatConfig = () => {
   const [monitorVideoError, setMonitorVideoError] = useState("");
   const [latestOccupation, setLatestOccupation] = useState(null);
   const [seats, setSeats] = useState([]);
+  const [runtimeSeats, setRuntimeSeats] = useState([]);
+  const [nowTs, setNowTs] = useState(Date.now());
   const [area, setArea] = useState("A区");
   const [prefix, setPrefix] = useState("A");
+  const [resetSeatNumber, setResetSeatNumber] = useState("");
   const [busyAction, setBusyAction] = useState("");
   const [generateTaskStatus, setGenerateTaskStatus] = useState("");
   const [lastSeatSourceVideo, setLastSeatSourceVideo] = useState(null);
@@ -57,7 +61,68 @@ const AdminSeatConfig = () => {
 
   useEffect(() => {
     fetchLatestOccupationResult();
+    fetchRuntimeSeats("A区");
   }, []);
+
+  useEffect(() => {
+    fetchRuntimeSeats(area);
+  }, [area]);
+
+  useEffect(() => {
+    const hasActiveTimer = runtimeSeats.some(
+      (seat) => Boolean(seat?.item_occupied_since) && Number(seat?.status) !== 0,
+    );
+    if (!hasActiveTimer) return undefined;
+
+    const timer = setInterval(() => {
+      setNowTs(Date.now());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [runtimeSeats]);
+
+  const fetchRuntimeSeats = async (targetArea = area) => {
+    try {
+      const resp = targetArea
+        ? await api.get("/seats", { params: { area: targetArea, _: Date.now() } })
+        : await api.get("/seats", { params: { _: Date.now() } });
+      setRuntimeSeats(Array.isArray(resp.data) ? resp.data : []);
+    } catch (e) {
+      setRuntimeSeats([]);
+    }
+  };
+
+  const formatDuration = (seconds) => {
+    const sec = Math.max(0, Math.floor(Number(seconds) || 0));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const pad = (value) => String(value).padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  };
+
+  const timerRows = runtimeSeats
+    .filter((seat) => Boolean(seat?.item_occupied_since) && Number(seat?.status) !== 0)
+    .map((seat) => {
+      const startedMs = new Date(seat.item_occupied_since).getTime();
+      const validStarted = Number.isFinite(startedMs);
+      const elapsedSec = validStarted ? Math.max(0, Math.floor((nowTs - startedMs) / 1000)) : 0;
+      const limitSec = LEAVE_ITEM_TIMEOUT_MINUTES * 60;
+      const remainSec = Math.max(0, limitSec - elapsedSec);
+      const overSec = Math.max(0, elapsedSec - limitSec);
+      const overtime = elapsedSec >= limitSec;
+
+      return {
+        seatId: seat.seat_id,
+        seatNumber: seat.seat_number || `#${seat.seat_id}`,
+        startedAt: seat.item_occupied_since,
+        elapsedText: formatDuration(elapsedSec),
+        remainText: formatDuration(remainSec),
+        overText: formatDuration(overSec),
+        overtime,
+      };
+    })
+    .sort((a, b) => String(a.seatNumber).localeCompare(String(b.seatNumber), "zh-CN", { numeric: true }));
 
   const fetchLatestOccupationResult = async () => {
     try {
@@ -103,6 +168,7 @@ const AdminSeatConfig = () => {
       // 再次拉取最新结果，避免后端回包字段不全或缓存导致页面未更新
       await new Promise((resolve) => setTimeout(resolve, 500));
       await fetchLatestOccupationResult();
+      await fetchRuntimeSeats(area);
 
       alert(`占座检测完成，异常占座 ${result.occupiedSeatIds?.length || 0} 个`);
     } catch (err) {
@@ -268,10 +334,55 @@ const AdminSeatConfig = () => {
         previewImageUrl: cleanPreviewImageUrl,
         sourceVideo: lastSeatSourceVideo,
       });
+      await fetchRuntimeSeats(area);
       alert(resp.data?.message || "座位已确认并保存");
     } catch (err) {
       console.error("Confirm seats error:", err);
       alert(err.response?.data?.error || "确认座位失败");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleResetTimerByArea = async () => {
+    if (!area) {
+      alert("请先填写区域");
+      return;
+    }
+    try {
+      setBusyAction("reset-area-timer");
+      const resp = await api.post("/seats/item-timer/reset", { area });
+      await fetchRuntimeSeats(area);
+      alert(resp.data?.message
+        ? `${resp.data.message}（${resp.data.affectedRows || 0} 条）`
+        : "区域离座计时已重置");
+    } catch (err) {
+      console.error("Reset timer by area error:", err);
+      alert(err.response?.data?.message || "区域离座计时重置失败");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleResetTimerBySeat = async () => {
+    const seatNumber = resetSeatNumber.trim();
+    if (!seatNumber) {
+      alert("请先输入座位号，例如 A12");
+      return;
+    }
+    try {
+      setBusyAction("reset-seat-timer");
+      const resp = await api.post("/seats/item-timer/reset", {
+        area,
+        seatNumber,
+      });
+      await fetchRuntimeSeats(area);
+      alert(resp.data?.message
+        ? `${resp.data.message}（${resp.data.affectedRows || 0} 条）`
+        : "座位离座计时已重置");
+    } catch (err) {
+      console.error("Reset timer by seat error:", err);
+      alert(err.response?.data?.message || "座位离座计时重置失败");
     } finally {
       setBusyAction("");
     }
@@ -366,6 +477,72 @@ const AdminSeatConfig = () => {
               视频信息：{latestOccupation.videoMeta.framesWritten || 0} 帧，
               {latestOccupation.videoMeta.fps || 0} FPS，
               时长约 {latestOccupation.videoMeta.durationSec || 0} 秒
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginBottom: "12px", padding: "10px", background: "#fff", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <strong>离座计时监控（{area}）</strong>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              <button
+                onClick={() => fetchRuntimeSeats(area)}
+                disabled={isBusy}
+                style={{ padding: "4px 8px", cursor: "pointer", border: `1px solid ${THEME.border}`, background: "#fff" }}
+              >
+                刷新
+              </button>
+              <button
+                onClick={handleResetTimerByArea}
+                disabled={isBusy}
+                style={{ padding: "4px 8px", cursor: "pointer", border: "none", background: THEME.primary, color: "#fff" }}
+              >
+                {busyAction === "reset-area-timer" ? "重置中..." : "重置本区域计时"}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ marginTop: "8px", display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              value={resetSeatNumber}
+              onChange={(e) => setResetSeatNumber(e.target.value)}
+              placeholder="输入座位号，如 A12"
+              style={{ width: "180px", padding: "6px 8px", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}
+            />
+            <button
+              onClick={handleResetTimerBySeat}
+              disabled={isBusy}
+              style={{ padding: "6px 10px", cursor: "pointer", border: "none", background: THEME.success, color: "#fff" }}
+            >
+              {busyAction === "reset-seat-timer" ? "重置中..." : "重置该座位计时"}
+            </button>
+          </div>
+
+          {timerRows.length === 0 ? (
+            <div style={{ marginTop: "6px", color: THEME.muted, fontSize: "13px" }}>
+              当前区域暂无“人离开且桌面有物品”的计时座位。
+            </div>
+          ) : (
+            <div style={{ marginTop: "8px", display: "grid", gap: "6px" }}>
+              {timerRows.map((row) => (
+                <div
+                  key={`timer-${row.seatId}`}
+                  style={{
+                    border: `1px solid ${row.overtime ? THEME.danger : THEME.border}`,
+                    borderRadius: "6px",
+                    padding: "8px",
+                    background: row.overtime ? "#fff4f2" : "#f9f9f7",
+                    fontSize: "13px",
+                    color: THEME.text,
+                  }}
+                >
+                  <div style={{ fontWeight: 700 }}>{row.seatNumber}</div>
+                  <div>离座已持续：{row.elapsedText}</div>
+                  <div style={{ color: row.overtime ? THEME.danger : THEME.muted }}>
+                    {row.overtime ? `已超时：${row.overText}` : `距离超时还剩：${row.remainText}`}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
