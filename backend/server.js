@@ -5,6 +5,7 @@ const { spawn } = require("child_process");
 const cron = require("node-cron");
 const fs = require("fs");
 const path = require("path");
+const multer = require("multer");
 require("dotenv").config();
 
 const app = express();
@@ -42,6 +43,7 @@ app.use((req, res, next) => {
 });
 
 app.use("/python-assets", express.static(path.join(__dirname, "python_scripts")));
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // 路由
 const authRoutes = require("./routes/auth");
@@ -57,6 +59,8 @@ const PY_SCRIPT_DIR = path.join(__dirname, "python_scripts");
 const SEAT_META_PATH = path.join(PY_SCRIPT_DIR, "seats_meta.json");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const MODEL_DIR = path.join(__dirname, "modules");
+const UPLOAD_ROOT = path.join(__dirname, "uploads");
+const UPLOAD_VIDEO_DIR = path.join(UPLOAD_ROOT, "videos");
 const DEFAULT_TEST_VIDEO = process.env.DEFAULT_TEST_VIDEO || path.join(PROJECT_ROOT, "v1.mp4");
 const SEAT_DETECT_MODEL = process.env.SEAT_DETECT_MODEL || path.join(MODEL_DIR, "seat_best.pt");
 const PERSON_DETECT_MODEL = process.env.PERSON_DETECT_MODEL || path.join(MODEL_DIR, "best.pt");
@@ -83,6 +87,64 @@ let latestOccupationResult = null;
 let presencePromptFeatureAvailable = true;
 let leavePromptFeatureAvailable = true;
 let seatItemOccupancyColumnReady = false;
+
+fs.mkdirSync(UPLOAD_VIDEO_DIR, { recursive: true });
+
+const uploadStorage = multer.diskStorage({
+  destination: (_, __, cb) => cb(null, UPLOAD_VIDEO_DIR),
+  filename: (_, file, cb) => {
+    const ext = path.extname(file.originalname || "").toLowerCase() || ".mp4";
+    const baseName = path
+      .basename(file.originalname || "video", ext)
+      .replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]+/g, "_")
+      .slice(0, 60) || "video";
+    cb(null, `${Date.now()}-${Math.floor(Math.random() * 100000)}-${baseName}${ext}`);
+  },
+});
+
+const uploadVideo = multer({
+  storage: uploadStorage,
+  limits: {
+    fileSize: Number(process.env.MAX_UPLOAD_VIDEO_SIZE || 500 * 1024 * 1024),
+  },
+  fileFilter: (_, file, cb) => {
+    const allowedMime = typeof file.mimetype === "string" && file.mimetype.startsWith("video/");
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const allowedExt = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"]);
+    if (allowedMime || allowedExt.has(ext)) return cb(null, true);
+    return cb(new Error("只允许上传视频文件"));
+  },
+});
+
+app.post("/api/upload-video", uploadVideo.single("video"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "请选择要上传的视频文件" });
+  }
+
+  const videoPath = req.file.path;
+  const videoUrl = `/uploads/videos/${req.file.filename}`;
+
+  return res.json({
+    message: "视频上传成功",
+    videoPath,
+    videoUrl,
+    originalName: req.file.originalname,
+    size: req.file.size,
+    mimeType: req.file.mimetype,
+  });
+});
+
+app.use((err, req, res, next) => {
+  if (req.path === "/api/upload-video") {
+    if (err?.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "视频文件太大，请缩小后再上传" });
+    }
+    if (err?.message) {
+      return res.status(400).json({ error: err.message });
+    }
+  }
+  return next(err);
+});
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

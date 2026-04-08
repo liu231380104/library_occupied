@@ -15,6 +15,90 @@ const THEME = {
 
 const PREVIEW_MEDIA_MAX_WIDTH = 1200;
 const LEAVE_ITEM_TIMEOUT_MINUTES = 15;
+const DEFAULT_SEAT_DETECT_FRAME = 0;
+
+const PAGE_STYLE = {
+  maxWidth: "1400px",
+  margin: "0 auto",
+  padding: "8px 4px 24px",
+  color: THEME.text,
+};
+
+const HERO_STYLE = {
+  marginBottom: "16px",
+  padding: "16px 18px",
+  border: `1px solid ${THEME.border}`,
+  borderRadius: "12px",
+  background: "linear-gradient(180deg, #fdfcf9 0%, #f6f2eb 100%)",
+  boxShadow: "0 1px 2px rgba(63, 71, 72, 0.04)",
+};
+
+const FLOW_GRID_STYLE = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: "10px",
+  marginTop: "12px",
+};
+
+const FLOW_CARD_STYLE = {
+  border: `1px solid ${THEME.border}`,
+  borderRadius: "10px",
+  padding: "12px",
+  background: "rgba(255,255,255,0.85)",
+};
+
+const FLOW_STEP_STYLE = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "28px",
+  height: "28px",
+  marginBottom: "8px",
+  borderRadius: "999px",
+  background: THEME.primary,
+  color: "#fff",
+  fontWeight: 700,
+  fontSize: "13px",
+};
+
+const FLOW_STEPS = [
+  {
+    key: "upload",
+    title: "上传视频",
+    desc: "先上传检测视频并确认视频路径。",
+  },
+  {
+    key: "recognize",
+    title: "识别座位",
+    desc: "上传后直接生成可编辑座位框。",
+  },
+  {
+    key: "save",
+    title: "确认保存",
+    desc: "校对座位框并保存到配置与数据库。",
+  },
+  {
+    key: "detect",
+    title: "运行检测",
+    desc: "按保存后的配置运行占座检测任务。",
+  },
+  {
+    key: "review",
+    title: "查看结果",
+    desc: "先看监控视频，再查看异常座位摘要。",
+  },
+];
+
+const FLOW_STEP_PROGRESS = {
+  upload: 0,
+  uploaded: 0,
+  generating: 1,
+  generated: 1,
+  saving: 2,
+  saved: 2,
+  detecting: 3,
+  detected: 4,
+};
 
 const normalizeMonitorVideoUrl = (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== "string") return "";
@@ -30,10 +114,10 @@ const normalizeMonitorVideoUrl = (rawUrl) => {
 };
 
 const AdminSeatConfig = () => {
-  const [videoPath, setVideoPath] = useState(
-    "D:\\third_year_of_university\\project\\2\\library_occupied\\v1.mp4",
-  );
-  const [frame, setFrame] = useState(0);
+  const [videoPath, setVideoPath] = useState("");
+  const [selectedVideoName, setSelectedVideoName] = useState("");
+  const [uploadingVideo, setUploadingVideo] = useState(false);
+  const [uploadVideoError, setUploadVideoError] = useState("");
   const [previewImageUrl, setPreviewImageUrl] = useState("");
   const [monitorVideoUrl, setMonitorVideoUrl] = useState("");
   const [monitorVideoError, setMonitorVideoError] = useState("");
@@ -46,6 +130,9 @@ const AdminSeatConfig = () => {
   const [resetSeatNumber, setResetSeatNumber] = useState("");
   const [busyAction, setBusyAction] = useState("");
   const [generateTaskStatus, setGenerateTaskStatus] = useState("");
+  const [flowStep, setFlowStep] = useState("upload");
+  const [flowHint, setFlowHint] = useState("请先上传视频，然后点击识别座位。");
+  const [isSeatConfigSaved, setIsSeatConfigSaved] = useState(false);
   const [lastSeatSourceVideo, setLastSeatSourceVideo] = useState(null);
   const [activeSeatIndex, setActiveSeatIndex] = useState(-1);
   const [seatSearch, setSeatSearch] = useState("");
@@ -58,6 +145,9 @@ const AdminSeatConfig = () => {
   });
   const imgRef = useRef(null);
   const previewPanelRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  const flowProgress = FLOW_STEP_PROGRESS[flowStep] ?? 0;
 
   useEffect(() => {
     fetchLatestOccupationResult();
@@ -148,8 +238,19 @@ const AdminSeatConfig = () => {
   };
 
   const handleRunOccupationDetection = async () => {
+    if (!videoPath.trim()) {
+      alert("请先上传视频或填写可访问的视频路径");
+      return;
+    }
+    if (!isSeatConfigSaved) {
+      alert("请先确认并保存座位配置，再运行占座检测");
+      return;
+    }
+
     try {
       setBusyAction("occupy-detect");
+      setFlowStep("detecting");
+      setFlowHint("检测任务已启动，处理中请稍候...");
       const resp = await api.post(
         "/detect-occupation",
         { videoPath, area, saveVideo: true },
@@ -170,9 +271,14 @@ const AdminSeatConfig = () => {
       await fetchLatestOccupationResult();
       await fetchRuntimeSeats(area);
 
+      setFlowStep("detected");
+      setFlowHint("检测已完成。请先查看监控视频，再核对异常占座结果。");
+
       alert(`占座检测完成，异常占座 ${result.occupiedSeatIds?.length || 0} 个`);
     } catch (err) {
       console.error("Detect occupation error:", err);
+      setFlowStep("saved");
+      setFlowHint("检测失败，请修正问题后重试。");
       if (err.code === "ECONNABORTED") {
         alert("占座检测超时，请缩短视频长度或稍后重试");
         return;
@@ -184,6 +290,61 @@ const AdminSeatConfig = () => {
   };
 
   const isBusy = Boolean(busyAction);
+  const canGenerateSeats = Boolean(videoPath.trim()) && !isBusy;
+  const canSaveSeats = seats.length > 0 && !isBusy;
+  const canRunDetection = Boolean(videoPath.trim()) && isSeatConfigSaved && !isBusy;
+
+  const handlePickVideoFile = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleUploadVideoFile = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setUploadingVideo(true);
+      setUploadVideoError("");
+      setSelectedVideoName(file.name);
+
+      const formData = new FormData();
+      formData.append("video", file);
+
+      const resp = await api.post("/upload-video", formData, {
+        timeout: 300000,
+      });
+
+      const uploadedPath = resp.data?.videoPath || "";
+      if (!uploadedPath) {
+        throw new Error("上传成功但没有返回视频路径");
+      }
+
+      setVideoPath(uploadedPath);
+      setSeats([]);
+      setPreviewImageUrl("");
+      setLastSeatSourceVideo(null);
+      setActiveSeatIndex(-1);
+      setSeatSearch("");
+      setLatestOccupation(null);
+      setMonitorVideoUrl("");
+      setMonitorVideoError("");
+      sessionStorage.removeItem("latestOccupationVideoUrl");
+      setGenerateTaskStatus(`已上传：${resp.data?.originalName || file.name}，请点击“识别座位”。`);
+      setSelectedVideoName(resp.data?.originalName || file.name);
+      setIsSeatConfigSaved(false);
+      setFlowStep("uploaded");
+      setFlowHint("视频上传成功。下一步：识别座位。");
+    } catch (err) {
+      console.error("Upload video error:", err);
+      setUploadVideoError(err.response?.data?.error || err.message || "视频上传失败");
+      setFlowHint("视频上传失败，请重试或手动填写视频路径。");
+    } finally {
+      setUploadingVideo(false);
+      event.target.value = "";
+    }
+  };
 
   useEffect(() => {
     const onUp = () => setDragging(null);
@@ -192,13 +353,20 @@ const AdminSeatConfig = () => {
   }, []);
 
   const handleGenerateSeats = async () => {
+    if (!videoPath.trim()) {
+      alert("请先上传视频或填写可访问的视频路径");
+      return;
+    }
+
     try {
       setBusyAction("generating");
       setGenerateTaskStatus("任务创建中...");
+      setFlowStep("generating");
+      setFlowHint("正在识别座位，请等待任务完成。");
 
       const createResp = await api.post("/generate-seats/tasks", {
         videoPath,
-        frame,
+        frame: DEFAULT_SEAT_DETECT_FRAME,
       });
 
       const taskId = createResp.data?.taskId;
@@ -232,6 +400,9 @@ const AdminSeatConfig = () => {
           setPreviewImageUrl(imageUrl);
           alert(`识别完成，共识别 ${result.count ?? 0} 个候选座位`);
           setGenerateTaskStatus("已完成");
+          setIsSeatConfigSaved(false);
+          setFlowStep("generated");
+          setFlowHint("座位识别完成。请检查座位框并点击“确认并保存座位配置”。");
           break;
         }
 
@@ -247,6 +418,8 @@ const AdminSeatConfig = () => {
       console.error("Generate seats error:", err);
       alert(err.message || err.response?.data?.error || "座位识别失败");
       setGenerateTaskStatus("失败");
+      setFlowStep(videoPath.trim() ? "uploaded" : "upload");
+      setFlowHint("座位识别失败，请检查视频后重试。");
     } finally {
       setBusyAction("");
     }
@@ -322,6 +495,8 @@ const AdminSeatConfig = () => {
     }
     try {
       setBusyAction("confirming");
+      setFlowStep("saving");
+      setFlowHint("正在保存座位配置...");
       const cleanPreviewImageUrl = previewImageUrl
         ? previewImageUrl.split("?")[0]
         : "";
@@ -330,15 +505,20 @@ const AdminSeatConfig = () => {
         prefix,
         seats,
         videoPath,
-        frame,
+        frame: DEFAULT_SEAT_DETECT_FRAME,
         previewImageUrl: cleanPreviewImageUrl,
         sourceVideo: lastSeatSourceVideo,
       });
       await fetchRuntimeSeats(area);
+      setIsSeatConfigSaved(true);
+      setFlowStep("saved");
+      setFlowHint("座位配置已保存。下一步：运行占座检测。");
       alert(resp.data?.message || "座位已确认并保存");
     } catch (err) {
       console.error("Confirm seats error:", err);
       alert(err.response?.data?.error || "确认座位失败");
+      setFlowStep("generated");
+      setFlowHint("保存失败，请检查参数并重试。");
     } finally {
       setBusyAction("");
     }
@@ -401,183 +581,167 @@ const AdminSeatConfig = () => {
     .filter((item) => item.label.toLowerCase().includes(normalizedSeatSearch));
 
   return (
-    <div>
-      <h2>视频座位配置</h2>
+    <div style={PAGE_STYLE}>
+      <div style={HERO_STYLE}>
+        <h2 style={{ margin: 0, color: THEME.text }}>视频座位配置</h2>
+        <div style={FLOW_GRID_STYLE}>
+          {FLOW_STEPS.map((step, idx) => {
+            const completed = idx < flowProgress;
+            const active = idx === flowProgress;
+            const cardStyle = {
+              ...FLOW_CARD_STYLE,
+              border: active
+                ? `1px solid ${THEME.primary}`
+                : completed
+                  ? `1px solid ${THEME.success}`
+                  : `1px solid ${THEME.border}`,
+              background: active
+                ? "#f7fbff"
+                : completed
+                  ? "#f4faf6"
+                  : "rgba(255,255,255,0.85)",
+            };
+
+            return (
+              <div key={step.key} style={cardStyle}>
+                <div
+                  style={{
+                    ...FLOW_STEP_STYLE,
+                    background: active ? THEME.primary : completed ? THEME.success : THEME.border,
+                  }}
+                >
+                  {idx + 1}
+                </div>
+                <div style={{ fontWeight: 700, marginBottom: "4px", color: THEME.text }}>{step.title}</div>
+                <div style={{ fontSize: "13px", color: THEME.muted, lineHeight: 1.5 }}>{step.desc}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div
         style={{
           border: `1px solid ${THEME.border}`,
           borderRadius: "8px",
-          padding: "14px",
-          marginBottom: "20px",
+          padding: "16px",
+          marginBottom: "18px",
           background: THEME.panel,
         }}
       >
-        <h3 style={{ marginTop: 0 }}>视频座位配置（测试）</h3>
-        <p style={{ marginTop: 0, color: THEME.muted }}>
-          先从视频识别座位，管理员确认或修改后，保存到 seats.json 和数据库。
+        <h3 style={{ marginTop: 0, marginBottom: "8px" }}>视频输入与检测操作</h3>
+        <p style={{ marginTop: 0, marginBottom: "12px", color: THEME.muted, lineHeight: 1.6 }}>
+          建议按顺序操作：先上传视频并识别座位，再编辑并保存配置，最后运行占座检测并查看结果。
         </p>
 
-        <div style={{ display: "flex", gap: "10px", marginBottom: "10px", flexWrap: "wrap" }}>
-          <input
-            style={{ flex: 1, minWidth: "360px", padding: "8px" }}
-            value={videoPath}
-            onChange={(e) => setVideoPath(e.target.value)}
-            placeholder="测试视频路径"
-          />
-          <input
-            type="number"
-            min={0}
-            style={{ width: "120px", padding: "8px" }}
-            value={frame}
-            onChange={(e) => setFrame(Number(e.target.value) || 0)}
-            placeholder="帧号"
-            title="0 表示第一帧"
-          />
+        <div
+          style={{
+            marginBottom: "12px",
+            padding: "10px 12px",
+            border: `1px solid ${THEME.border}`,
+            borderRadius: "8px",
+            background: "#fff",
+            color: THEME.text,
+            fontSize: "14px",
+          }}
+        >
+          当前步骤提示：{flowHint}
+        </div>
+
+        <input ref={fileInputRef} type="file" accept="video/*" onChange={handleUploadVideoFile} style={{ display: "none" }} />
+
+        <div style={{ display: "flex", gap: "10px", marginBottom: "10px", flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={handlePickVideoFile}
+            disabled={uploadingVideo}
+            style={{ padding: "8px 12px", cursor: "pointer", border: `1px solid ${THEME.border}`, background: "#fff" }}
+          >
+            {uploadingVideo ? "上传中..." : "选择视频文件上传"}
+          </button>
+          <div style={{ color: THEME.muted, fontSize: "13px" }}>
+            {selectedVideoName ? `已选：${selectedVideoName}` : "未选择文件，仍可手动填写路径兜底"}
+          </div>
           <button
             onClick={handleGenerateSeats}
-            disabled={isBusy}
+            disabled={!canGenerateSeats}
             style={{ padding: "8px 12px", cursor: "pointer" }}
           >
-            {busyAction === "generating" ? "识别中..." : "1. 识别座位"}
-          </button>
-          <button
-            onClick={handleRunOccupationDetection}
-            disabled={isBusy}
-            style={{ padding: "8px 12px", cursor: "pointer", background: THEME.accent, color: "#fff", border: "none" }}
-          >
-            {busyAction === "occupy-detect" ? "检测中..." : "运行占座检测并更新举报中心"}
-          </button>
-          <button
-            onClick={fetchLatestOccupationResult}
-            disabled={isBusy}
-            style={{ padding: "8px 12px", cursor: "pointer" }}
-          >
-            刷新最近检测结果
+            {busyAction === "generating" ? "识别中..." : "识别座位"}
           </button>
         </div>
 
-        <div style={{ marginBottom: "12px", padding: "10px", background: "#fff", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
-            <strong>占座检测结果</strong>
-            <span style={{ color: THEME.muted, fontSize: "13px" }}>
-              {latestOccupation?.detectedAt ? `检测时间：${new Date(latestOccupation.detectedAt).toLocaleString("zh-CN")}` : "暂无检测记录"}
-            </span>
+        <div style={{ display: "flex", gap: "10px", marginBottom: "10px", flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            style={{ flex: 1, minWidth: "320px", padding: "8px" }}
+            value={videoPath}
+            onChange={(e) => setVideoPath(e.target.value)}
+            placeholder="兜底：若上传失败，可手动填写后端可访问的视频路径"
+          />
+          <div style={{ color: THEME.muted, fontSize: "12px" }}>
+            上传后的路径会自动填到这里
           </div>
-          <div style={{ marginTop: "6px", color: THEME.text, fontSize: "14px" }}>
-            异常占座座位ID：
-            {Array.isArray(latestOccupation?.occupiedSeatIds) && latestOccupation.occupiedSeatIds.length > 0
-              ? latestOccupation.occupiedSeatIds.join(", ")
-              : "无"}
-          </div>
-          <div style={{ marginTop: "4px", color: THEME.muted, fontSize: "13px" }}>
-            模型：人 {latestOccupation?.models?.person || "best.pt"}；物品 {latestOccupation?.models?.item || "yolov8n.pt"}
-          </div>
-          {latestOccupation?.videoMeta && (
-            <div style={{ marginTop: "4px", color: THEME.muted, fontSize: "13px" }}>
-              视频信息：{latestOccupation.videoMeta.framesWritten || 0} 帧，
-              {latestOccupation.videoMeta.fps || 0} FPS，
-              时长约 {latestOccupation.videoMeta.durationSec || 0} 秒
-            </div>
-          )}
         </div>
 
-        <div style={{ marginBottom: "12px", padding: "10px", background: "#fff", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-            <strong>离座计时监控（{area}）</strong>
-            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-              <button
-                onClick={() => fetchRuntimeSeats(area)}
-                disabled={isBusy}
-                style={{ padding: "4px 8px", cursor: "pointer", border: `1px solid ${THEME.border}`, background: "#fff" }}
-              >
-                刷新
-              </button>
-              <button
-                onClick={handleResetTimerByArea}
-                disabled={isBusy}
-                style={{ padding: "4px 8px", cursor: "pointer", border: "none", background: THEME.primary, color: "#fff" }}
-              >
-                {busyAction === "reset-area-timer" ? "重置中..." : "重置本区域计时"}
-              </button>
-            </div>
+        {uploadVideoError && (
+          <div style={{ marginBottom: "10px", color: THEME.danger, fontSize: "13px" }}>
+            {uploadVideoError}
           </div>
+        )}
 
-          <div style={{ marginTop: "8px", display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: "12px", flexWrap: "wrap", marginTop: "14px", marginBottom: "12px" }}>
+          <div>
+            <h3 style={{ marginTop: 0, marginBottom: "8px" }}>座位框编辑与保存</h3>
+            <p style={{ marginTop: 0, marginBottom: 0, color: THEME.muted, lineHeight: 1.6 }}>
+              先调整座位框，再保存配置；新增座位框和确认保存放在一起，操作会更顺手。
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end" }}>
             <input
-              value={resetSeatNumber}
-              onChange={(e) => setResetSeatNumber(e.target.value)}
-              placeholder="输入座位号，如 A12"
-              style={{ width: "180px", padding: "6px 8px", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}
+              style={{ width: "140px", padding: "8px" }}
+              value={area}
+              onChange={(e) => setArea(e.target.value)}
+              placeholder="区域，如A区"
+            />
+            <input
+              style={{ width: "120px", padding: "8px" }}
+              value={prefix}
+              onChange={(e) => setPrefix(e.target.value)}
+              placeholder="编号前缀，如A"
             />
             <button
-              onClick={handleResetTimerBySeat}
-              disabled={isBusy}
-              style={{ padding: "6px 10px", cursor: "pointer", border: "none", background: THEME.success, color: "#fff" }}
+              onClick={addSeat}
+              style={{ padding: "8px 12px", cursor: "pointer" }}
             >
-              {busyAction === "reset-seat-timer" ? "重置中..." : "重置该座位计时"}
+              新增座位框
+            </button>
+            <button
+              onClick={handleConfirmSeats}
+              disabled={!canSaveSeats}
+              style={{ padding: "8px 12px", cursor: "pointer", background: THEME.success, color: "#fff", border: "none" }}
+            >
+              {busyAction === "confirming" ? "保存中..." : "确认并保存座位配置"}
+            </button>
+            <button
+              onClick={handleRunOccupationDetection}
+              disabled={!canRunDetection}
+              style={{ padding: "8px 12px", cursor: "pointer", background: THEME.accent, color: "#fff", border: "none" }}
+            >
+              {busyAction === "occupy-detect" ? "检测中..." : "运行占座检测"}
+            </button>
+            <button
+              onClick={fetchLatestOccupationResult}
+              disabled={isBusy}
+              style={{ padding: "8px 12px", cursor: "pointer" }}
+            >
+              刷新最近检测结果
             </button>
           </div>
-
-          {timerRows.length === 0 ? (
-            <div style={{ marginTop: "6px", color: THEME.muted, fontSize: "13px" }}>
-              当前区域暂无“人离开且桌面有物品”的计时座位。
-            </div>
-          ) : (
-            <div style={{ marginTop: "8px", display: "grid", gap: "6px" }}>
-              {timerRows.map((row) => (
-                <div
-                  key={`timer-${row.seatId}`}
-                  style={{
-                    border: `1px solid ${row.overtime ? THEME.danger : THEME.border}`,
-                    borderRadius: "6px",
-                    padding: "8px",
-                    background: row.overtime ? "#fff4f2" : "#f9f9f7",
-                    fontSize: "13px",
-                    color: THEME.text,
-                  }}
-                >
-                  <div style={{ fontWeight: 700 }}>{row.seatNumber}</div>
-                  <div>离座已持续：{row.elapsedText}</div>
-                  <div style={{ color: row.overtime ? THEME.danger : THEME.muted }}>
-                    {row.overtime ? `已超时：${row.overText}` : `距离超时还剩：${row.remainText}`}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
         {generateTaskStatus && (
           <div style={{ marginBottom: "10px", color: THEME.text }}>{generateTaskStatus}</div>
         )}
-
-        <div style={{ display: "flex", gap: "10px", marginBottom: "10px", flexWrap: "wrap" }}>
-          <input
-            style={{ width: "140px", padding: "8px" }}
-            value={area}
-            onChange={(e) => setArea(e.target.value)}
-            placeholder="区域，如A区"
-          />
-          <input
-            style={{ width: "120px", padding: "8px" }}
-            value={prefix}
-            onChange={(e) => setPrefix(e.target.value)}
-            placeholder="编号前缀，如A"
-          />
-          <button
-            onClick={addSeat}
-            style={{ padding: "8px 12px", cursor: "pointer" }}
-          >
-            + 新增座位框
-          </button>
-          <button
-            onClick={handleConfirmSeats}
-            disabled={isBusy}
-            style={{ padding: "8px 12px", cursor: "pointer", background: THEME.success, color: "#fff", border: "none" }}
-          >
-            {busyAction === "confirming" ? "保存中..." : "3. 确认并生成 seats.json"}
-          </button>
-        </div>
 
         {previewImageUrl && (
           <div
@@ -815,8 +979,74 @@ const AdminSeatConfig = () => {
           </div>
         )}
 
-        <div style={{ marginBottom: "12px" }}>
-          <strong>前端监控视频：</strong>
+        <div style={{ marginTop: "12px", padding: "10px", background: "#fff", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <strong>离座计时监控（{area}）</strong>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              <button
+                onClick={() => fetchRuntimeSeats(area)}
+                disabled={isBusy}
+                style={{ padding: "4px 8px", cursor: "pointer", border: `1px solid ${THEME.border}`, background: "#fff" }}
+              >
+                刷新
+              </button>
+              <button
+                onClick={handleResetTimerByArea}
+                disabled={isBusy}
+                style={{ padding: "4px 8px", cursor: "pointer", border: "none", background: THEME.primary, color: "#fff" }}
+              >
+                {busyAction === "reset-area-timer" ? "重置中..." : "重置本区域计时"}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ marginTop: "8px", display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              value={resetSeatNumber}
+              onChange={(e) => setResetSeatNumber(e.target.value)}
+              placeholder="输入座位号，如 A12"
+              style={{ width: "180px", padding: "6px 8px", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}
+            />
+            <button
+              onClick={handleResetTimerBySeat}
+              disabled={isBusy}
+              style={{ padding: "6px 10px", cursor: "pointer", border: "none", background: THEME.success, color: "#fff" }}
+            >
+              {busyAction === "reset-seat-timer" ? "重置中..." : "重置该座位计时"}
+            </button>
+          </div>
+
+          {timerRows.length === 0 ? (
+            <div style={{ marginTop: "6px", color: THEME.muted, fontSize: "13px" }}>
+              当前区域暂无“人离开且桌面有物品”的计时座位。
+            </div>
+          ) : (
+            <div style={{ marginTop: "8px", display: "grid", gap: "6px" }}>
+              {timerRows.map((row) => (
+                <div
+                  key={`timer-${row.seatId}`}
+                  style={{
+                    border: `1px solid ${row.overtime ? THEME.danger : THEME.border}`,
+                    borderRadius: "6px",
+                    padding: "8px",
+                    background: row.overtime ? "#fff4f2" : "#f9f9f7",
+                    fontSize: "13px",
+                    color: THEME.text,
+                  }}
+                >
+                  <div style={{ fontWeight: 700 }}>{row.seatNumber}</div>
+                  <div>离座已持续：{row.elapsedText}</div>
+                  <div style={{ color: row.overtime ? THEME.danger : THEME.muted }}>
+                    {row.overtime ? `已超时：${row.overText}` : `距离超时还剩：${row.remainText}`}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginTop: "12px" }}>
+          <strong>前端监控视频</strong>
           <div
             style={{
               marginTop: "8px",
@@ -835,7 +1065,7 @@ const AdminSeatConfig = () => {
                   onError={() => {
                     setMonitorVideoError("视频加载失败：资源可能尚未生成完成或路径不可访问，请点击“刷新最近检测结果”后重试。");
                   }}
-                  src={/^https?:\/\//i.test(monitorVideoUrl) ? monitorVideoUrl : `http://localhost:5000${monitorVideoUrl}`}
+                  src={/^https?:\/\//i.test(monitorVideoUrl) ? monitorVideoUrl : `http://localhost:5000${monitorVideoUrl}`} 
                 />
                 {monitorVideoError && (
                   <div style={{ marginTop: "8px", color: THEME.danger, fontSize: "13px" }}>
@@ -845,12 +1075,44 @@ const AdminSeatConfig = () => {
               </>
             ) : (
               <div style={{ padding: "12px", border: `1px dashed ${THEME.border}`, borderRadius: "6px", color: THEME.muted }}>
-                暂无检测视频。请点击“运行占座检测并更新举报中心”。
+                暂无检测视频。请先完成“确认并保存座位配置”，再点击“运行占座检测”。
               </div>
             )}
           </div>
         </div>
 
+        <div style={{ marginTop: "12px", padding: "10px", background: "#fff", border: `1px solid ${THEME.border}`, borderRadius: "6px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
+            <strong>占座检测结果</strong>
+            <span style={{ color: THEME.muted, fontSize: "13px" }}>
+              {latestOccupation?.detectedAt ? `检测时间：${new Date(latestOccupation.detectedAt).toLocaleString("zh-CN")}` : "暂无检测记录"}
+            </span>
+          </div>
+          {latestOccupation ? (
+            <>
+              <div style={{ marginTop: "6px", color: THEME.text, fontSize: "14px" }}>
+                异常占座座位ID：
+                {Array.isArray(latestOccupation?.occupiedSeatIds) && latestOccupation.occupiedSeatIds.length > 0
+                  ? latestOccupation.occupiedSeatIds.join(", ")
+                  : "无"}
+              </div>
+              <div style={{ marginTop: "4px", color: THEME.muted, fontSize: "13px" }}>
+                模型：人 {latestOccupation?.models?.person || "best.pt"}；物品 {latestOccupation?.models?.item || "yolov8n.pt"}
+              </div>
+              {latestOccupation?.videoMeta && (
+                <div style={{ marginTop: "4px", color: THEME.muted, fontSize: "13px" }}>
+                  视频信息：{latestOccupation.videoMeta.framesWritten || 0} 帧，
+                  {latestOccupation.videoMeta.fps || 0} FPS，
+                  时长约 {latestOccupation.videoMeta.durationSec || 0} 秒
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ marginTop: "6px", color: THEME.muted, fontSize: "13px" }}>
+              暂无可展示结果。请先运行占座检测并等待监控视频生成完成。
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
