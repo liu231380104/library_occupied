@@ -6,6 +6,7 @@ const cron = require("node-cron");
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
+const { broadcastSeatUpdate } = require("./utils/seatEvents");
 require("dotenv").config();
 
 const app = express();
@@ -76,6 +77,9 @@ const OCCUPATION_CRON_MAX_FRAMES = Number.isFinite(Number(process.env.OCCUPATION
 const OCCUPATION_CRON_DETECT_INTERVAL = Number.isFinite(Number(process.env.OCCUPATION_CRON_DETECT_INTERVAL))
   ? Math.max(1, Math.min(30, Math.floor(Number(process.env.OCCUPATION_CRON_DETECT_INTERVAL))))
   : 10;
+const OCCUPATION_OCCUPY_THRESHOLD = Number.isFinite(Number(process.env.OCCUPATION_OCCUPY_THRESHOLD))
+  ? Math.max(1, Math.min(10, Math.floor(Number(process.env.OCCUPATION_OCCUPY_THRESHOLD))))
+  : 1;
 const LEAVE_ITEM_TIMEOUT_MINUTES = Number(process.env.LEAVE_ITEM_TIMEOUT_MINUTES || 15);
 let detectionRunning = false;
 let detectionStartedAt = 0;
@@ -953,6 +957,8 @@ async function runSeatDetection({
     ),
     "--start-frame",
     String(startFrameNormalized),
+    "--occupy-thr",
+    String(OCCUPATION_OCCUPY_THRESHOLD),
   ];
   if (outputFps > 1) {
     args.push("--output-fps", String(outputFps));
@@ -1401,6 +1407,12 @@ async function runSeatDetection({
     if (saveVideo) {
       latestOccupationResult = payload;
     }
+    broadcastSeatUpdate({
+      area,
+      source: "detection",
+      reason: detectionChanged ? "seat-status-updated" : "seat-status-refreshed",
+      seatIds: occupiedSeatIds,
+    });
     console.log(
       "占座检测完成，occupiedSeatIds:",
       occupiedSeatIds,

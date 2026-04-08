@@ -185,6 +185,9 @@ def main():
 
     frame_idx = 0
     frames_written = 0
+    occupy_threshold = max(1, int(args.occupy_thr or 1))
+    occupied_counter = [0 for _ in seats]
+    latest_state_by_index = [None for _ in seats]
     occupied_seats = []
     seat_states = []
     current_occupied = set()
@@ -207,8 +210,13 @@ def main():
                         args.conf,
                     )
                 current_occupied = set(detection_result["occupiedIndices"])
-                occupied_seats = sorted(current_occupied)
-                seat_states = detection_result["seatStates"]
+                for state in detection_result["seatStates"]:
+                    seat_index = int(state.get("index", -1))
+                    if seat_index < 0 or seat_index >= len(seats):
+                        continue
+                    if state.get("occupied"):
+                        occupied_counter[seat_index] += 1
+                        latest_state_by_index[seat_index] = state
         else:
             # 默认兼容旧逻辑：只在第300帧（10秒）检测一次
             if frame_idx == 299:
@@ -221,9 +229,14 @@ def main():
                     args.imgsz,
                     args.conf,
                 )
-                occupied_seats = detection_result["occupiedIndices"]
-                seat_states = detection_result["seatStates"]
-                current_occupied = set(occupied_seats)
+                current_occupied = set(detection_result["occupiedIndices"])
+                for state in detection_result["seatStates"]:
+                    seat_index = int(state.get("index", -1))
+                    if seat_index < 0 or seat_index >= len(seats):
+                        continue
+                    if state.get("occupied"):
+                        occupied_counter[seat_index] += 1
+                        latest_state_by_index[seat_index] = state
 
         # 始终绘制高对比座位框，便于在压缩后视频中观察
         for i, seat in enumerate(seats):
@@ -259,6 +272,19 @@ def main():
     if frames_written <= 0:
         print(json.dumps({"error": "未写入任何视频帧，输出视频为空"}))
         return
+
+    occupied_seats = [index for index, count in enumerate(occupied_counter) if count >= occupy_threshold]
+    seat_states = []
+    occupied_set = set(occupied_seats)
+    for index, _seat in enumerate(seats):
+        latest_state = latest_state_by_index[index] or {}
+        occupied = index in occupied_set
+        seat_states.append({
+            "index": index,
+            "hasPerson": bool(latest_state.get("hasPerson")) if occupied else False,
+            "hasItem": bool(latest_state.get("hasItem")) if occupied else False,
+            "occupied": bool(occupied),
+        })
 
     # 输出JSON结果给Node.js：保留索引结果，由后端按数据库座位顺序映射到seat_id
     occupied_indices = [int(i) for i in occupied_seats]
