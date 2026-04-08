@@ -14,7 +14,7 @@ const THEME = {
 };
 
 const PREVIEW_MEDIA_MAX_WIDTH = 1200;
-const LEAVE_ITEM_TIMEOUT_MINUTES = 15;
+const LEAVE_ITEM_TIMEOUT_MINUTES = 3; // 与后端保持一致：3分钟后自动释放
 
 const normalizeMonitorVideoUrl = (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== "string") return "";
@@ -80,6 +80,27 @@ const AdminSeatConfig = () => {
 
     return () => clearInterval(timer);
   }, [runtimeSeats]);
+
+  useEffect(() => {
+    // 监控是否有座位已超时，如果有就自动刷新数据确保座位被正确释放
+    const hasOvertimeTimer = runtimeSeats.some((seat) => {
+      if (!Boolean(seat?.item_occupied_since) || Number(seat?.status) === 0) return false;
+      const startedMs = new Date(seat.item_occupied_since).getTime();
+      const validStarted = Number.isFinite(startedMs);
+      const elapsedSec = validStarted ? Math.max(0, Math.floor((nowTs - startedMs) / 1000)) : 0;
+      const limitSec = LEAVE_ITEM_TIMEOUT_MINUTES * 60;
+      return elapsedSec >= limitSec;
+    });
+
+    if (!hasOvertimeTimer) return undefined;
+
+    // 每2秒检查一次超时座位，如果有则刷新数据
+    const refreshTimer = setInterval(() => {
+      fetchRuntimeSeats(area);
+    }, 2000);
+
+    return () => clearInterval(refreshTimer);
+  }, [runtimeSeats, nowTs, area]);
 
   const fetchRuntimeSeats = async (targetArea = area) => {
     try {

@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const db = require("../config/db");
 const fs = require("fs");
 const path = require("path");
+const { broadcastSeatUpdate, subscribeSeatUpdates } = require("../utils/seatEvents");
 
 const router = express.Router();
 const PY_SCRIPT_DIR = path.join(__dirname, "..", "python_scripts");
@@ -48,6 +49,38 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
+
+router.get("/stream", (req, res) => {
+  const requestedArea = String(req.query.area || "").trim();
+
+  res.status(200);
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders?.();
+  res.write(`event: connected\ndata: ${JSON.stringify({ ready: true, area: requestedArea })}\n\n`);
+
+  const unsubscribe = subscribeSeatUpdates((payload) => {
+    const payloadArea = String(payload?.area || "").trim();
+    if (requestedArea && payloadArea && requestedArea !== payloadArea) {
+      return;
+    }
+    res.write(`event: seat-update\ndata: ${JSON.stringify(payload)}\n\n`);
+  });
+
+  const heartbeat = setInterval(() => {
+    res.write(`: ping ${Date.now()}\n\n`);
+  }, 25000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    res.end();
+  });
+});
 
 // 获取座位区域列表（用于前端下拉框）
 router.get("/areas", async (req, res) => {
@@ -185,6 +218,11 @@ router.post("/release/:seatId", async (req, res) => {
   const { seatId } = req.params;
   try {
     const connection = await db;
+    const [seatInfoRows] = await connection.query(
+      "SELECT seat_id, area FROM seats WHERE seat_id = ? LIMIT 1",
+      [seatId],
+    );
+    const seatInfo = seatInfoRows[0] || null;
 
     // 更新座位为可用
     await connection.query("UPDATE seats SET status = 0 WHERE seat_id = ?", [
@@ -196,6 +234,13 @@ router.post("/release/:seatId", async (req, res) => {
       "UPDATE reservations SET res_status = 'completed', end_time = NOW() WHERE seat_id = ? AND res_status = 'active'",
       [seatId],
     );
+
+    broadcastSeatUpdate({
+      area: seatInfo?.area || "",
+      source: "seat-service",
+      reason: "seat-released",
+      seatId: Number(seatId),
+    });
 
     res.json({ message: "座位已释放，状态更新完成" });
   } catch (error) {
@@ -219,6 +264,11 @@ router.patch("/:seatId", authenticateToken, async (req, res) => {
 
   try {
     const connection = await db;
+    const [seatInfoRows] = await connection.query(
+      "SELECT area FROM seats WHERE seat_id = ? LIMIT 1",
+      [seatId],
+    );
+    const seatInfo = seatInfoRows[0] || null;
 
     // 更新座位状态
     await connection.query("UPDATE seats SET status = ? WHERE seat_id = ?", [
@@ -226,10 +276,65 @@ router.patch("/:seatId", authenticateToken, async (req, res) => {
       seatId,
     ]);
 
+    broadcastSeatUpdate({
+      area: seatInfo?.area || "",
+      source: "seat-service",
+      reason: "seat-status-patched",
+      seatId: Number(seatId),
+    });
+
     res.json({ message: "座位状态已更新" });
   } catch (error) {
     console.error("Update seat status error:", error);
     res.status(500).json({ message: "更新座位状态失败" });
+  }
+});
+
+// 管理员重置座位离座计时
+router.post("/item-timer/reset", authenticateToken, async (req, res) => {
+  if (req.user.role !== "admin") {
+    return res.status(403).json({ message: "权限不足" });
+  }
+
+  const { area, seatNumber } = req.body;
+
+  if (!area) {
+    return res.status(400).json({ message: "区域为必填项" });
+  }
+
+  try {
+    const connection = await db;
+    let updateQuery = "UPDATE seats SET item_occupied_since = NULL WHERE area = ?";
+    let params = [String(area).trim()];
+
+    // 如果指定了座位号，则只重置该座位
+    if (seatNumber) {
+      updateQuery += " AND seat_number = ?";
+      params.push(String(seatNumber).trim());
+    }
+
+    const [result] = await connection.query(updateQuery, params);
+    const affectedRows = result.affectedRows || 0;
+
+    // 广播座位更新事件
+    if (affectedRows > 0) {
+      broadcastSeatUpdate({
+        area: String(area).trim(),
+        source: "admin",
+        reason: "item-timer-reset",
+        seatNumber: seatNumber ? String(seatNumber).trim() : null,
+      });
+    }
+
+    res.json({
+      message: seatNumber
+        ? `座位 ${seatNumber} 计时已重置`
+        : `区域 ${area} 的 ${affectedRows} 个座位计时已重置`,
+      affectedRows,
+    });
+  } catch (error) {
+    console.error("Reset item timer error:", error);
+    res.status(500).json({ message: "重置计时失败" });
   }
 });
 

@@ -5,6 +5,7 @@ const { spawn } = require("child_process");
 const cron = require("node-cron");
 const fs = require("fs");
 const path = require("path");
+const { broadcastSeatUpdate } = require("./utils/seatEvents");
 require("dotenv").config();
 
 const app = express();
@@ -639,6 +640,12 @@ app.post("/api/confirm-seats", async (req, res) => {
       latestOccupationResult = null;
     }
 
+    broadcastSeatUpdate({
+      area,
+      source: "confirm-seats",
+      reason: "seat-layout-updated",
+    });
+
     res.json({
       message: `成功创建${normalizedSeats.length}个${area}座位`,
       count: normalizedSeats.length,
@@ -1080,53 +1087,7 @@ async function runSeatDetection({
               }
             }
           }
-
-          const startedAtMs = itemOccupiedSince ? new Date(itemOccupiedSince).getTime() : Date.now();
-          const timeoutMs = Math.max(1, LEAVE_ITEM_TIMEOUT_MINUTES) * 60 * 1000;
-
-          if (Date.now() - startedAtMs >= timeoutMs) {
-            const sourceKey = `leave-timeout-${seatId}-${startedAtMs}`;
-            const [existingRows] = await conn.query(
-              `SELECT notification_id
-               FROM notification_history
-               WHERE user_id = ?
-                 AND source = 'leave-timeout'
-                 AND source_key = ?
-               LIMIT 1`,
-              [activeReservations[0].user_id, sourceKey],
-            );
-
-            if (existingRows.length === 0) {
-              await conn.query(
-                `INSERT INTO notification_history
-                   (user_id, event_type, title, message, source, source_key, payload_json, is_read)
-                 VALUES (?, 'danger', ?, ?, 'leave-timeout', ?, ?, 0)
-                 ON DUPLICATE KEY UPDATE
-                   event_type = VALUES(event_type),
-                   title = VALUES(title),
-                   message = VALUES(message),
-                   payload_json = VALUES(payload_json),
-                   is_read = notification_history.is_read,
-                   updated_at = CURRENT_TIMESTAMP`,
-                [
-                  activeReservations[0].user_id,
-                  "离座超时违规",
-                  `系统检测到你在${area}${seatRow.seat_number}离开后桌面物品已持续超过${LEAVE_ITEM_TIMEOUT_MINUTES}分钟，请尽快返回；否则将判定为违规并释放座位。`,
-                  sourceKey,
-                  JSON.stringify({
-                    reservationId: activeReservations[0].reservation_id,
-                    seatId,
-                    seatNumber: seatRow.seat_number,
-                    area,
-                    itemOccupiedSince: itemOccupiedSince || new Date(startedAtMs).toISOString(),
-                    timeoutMinutes: LEAVE_ITEM_TIMEOUT_MINUTES,
-                  }),
-                ],
-              );
-
-              await conn.query("UPDATE seats SET status = 3 WHERE seat_id = ?", [seatId]);
-            }
-          }
+          // 注意：离座提示超时后会自动释放座位，不再需要"一直计时到N分钟"的违规逻辑
         }
         continue;
       }
@@ -1339,6 +1300,13 @@ async function runSeatDetection({
     if (saveVideo) {
       latestOccupationResult = payload;
     }
+
+    broadcastSeatUpdate({
+      area,
+      source: "occupation-detection",
+      reason: "seat-status-updated",
+      seatIds: occupiedSeatIds,
+    });
     console.log(
       "占座检测完成，occupiedSeatIds:",
       occupiedSeatIds,
