@@ -86,16 +86,54 @@ router.get("/", async (req, res) => {
     let rows;
     if (area) {
       [rows] = await connection.query(
-        "SELECT * FROM seats WHERE area = ? ORDER BY seat_number ASC",
+        "SELECT * FROM seats WHERE area = ? ORDER BY CAST(REGEXP_REPLACE(seat_number, '[^0-9]', '') AS UNSIGNED) ASC, seat_number ASC",
         [area],
       );
     } else {
       [rows] = await connection.query(
-        "SELECT * FROM seats ORDER BY area ASC, seat_number ASC",
+        "SELECT * FROM seats ORDER BY area ASC, CAST(REGEXP_REPLACE(seat_number, '[^0-9]', '') AS UNSIGNED) ASC, seat_number ASC",
       );
     }
 
-    const enrichedRows = rows.map((seatRow) => {
+    const requestedArea = String(area || "").trim();
+    const currentMetaArea = String(seatMeta?.area || "").trim();
+    const currentMetaPrefix = String(seatMeta?.prefix || "").trim();
+    const currentMetaSeatCount = Number(seatMeta?.seatsCount || 0);
+    const seatMappings = Array.isArray(seatMeta?.seatMappings) ? seatMeta.seatMappings : [];
+    const mappingBySeatId = new Map(
+      seatMappings
+        .map((item, idx) => {
+          const seatId = Number(item?.seatId);
+          const bbox = Array.isArray(item?.bbox) ? item.bbox : null;
+          const seatNumber = String(item?.seatNumber || "");
+          if (!Number.isInteger(seatId) || seatId <= 0) return null;
+          return [seatId, {
+            idx,
+            bbox,
+            seatNumber,
+          }];
+        })
+        .filter(Boolean),
+    );
+
+    const strictCurrentArea = Boolean(requestedArea && currentMetaArea && requestedArea === currentMetaArea);
+
+    if (strictCurrentArea) {
+      if (mappingBySeatId.size > 0) {
+        rows = rows.filter((seatRow) => mappingBySeatId.has(Number(seatRow.seat_id)));
+      } else if (currentMetaPrefix && currentMetaSeatCount > 0) {
+        rows = rows.filter((seatRow) => {
+          const seatNumber = String(seatRow?.seat_number || "");
+          const match = seatNumber.match(/^([^\d]*)(\d+)$/);
+          if (!match) return false;
+          const rowPrefix = String(match[1] || "");
+          const rowIndex = Number(match[2]);
+          return rowPrefix === currentMetaPrefix && rowIndex >= 1 && rowIndex <= currentMetaSeatCount;
+        });
+      }
+    }
+
+    let enrichedRows = rows.map((seatRow) => {
       const seatNumber = String(seatRow.seat_number || "");
       const match = seatNumber.match(/^([^\d]*)(\d+)$/);
       const rowPrefix = match?.[1] || "";
@@ -103,7 +141,9 @@ router.get("/", async (req, res) => {
       const metaPrefix = String(seatMeta?.prefix || "");
       const sameArea = !seatMeta?.area || seatMeta.area === seatRow.area;
       const samePrefix = !metaPrefix || metaPrefix === rowPrefix;
-      const seatBox = sameArea && samePrefix && rowIndex >= 0 ? seatBoxes[rowIndex] : null;
+      const mapped = mappingBySeatId.get(Number(seatRow.seat_id));
+      const mappedBox = Array.isArray(mapped?.bbox) && mapped.bbox.length === 4 ? mapped.bbox : null;
+      const seatBox = mappedBox || (sameArea && samePrefix && rowIndex >= 0 ? seatBoxes[rowIndex] : null);
 
       if (!Array.isArray(seatBox) || seatBox.length !== 4) {
         return {
@@ -123,6 +163,15 @@ router.get("/", async (req, res) => {
         item_occupied_since: seatRow.item_occupied_since || null,
       };
     });
+
+    // 对“当前标定区域”再做一次严格过滤：只返回与当前座位图可对齐的座位
+    if (strictCurrentArea) {
+      enrichedRows = enrichedRows.filter((seatRow) =>
+        Array.isArray(seatRow?.seat_bbox)
+        && seatRow.seat_bbox.length === 4
+        && seatRow.seat_bbox.every((v) => Number.isFinite(Number(v))),
+      );
+    }
 
     res.json(enrichedRows);
   } catch (err) {

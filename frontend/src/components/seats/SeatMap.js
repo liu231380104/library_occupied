@@ -288,30 +288,24 @@ const SeatMap = () => {
     (seatMapDisplayWidth * seatMapNaturalHeight) / Math.max(seatMapNaturalWidth, 1),
   );
 
-  // 仅调整左侧网格展示顺序：尽量与右侧座位图空间位置一致（先上后下，再左到右）
+  // 左侧网格固定按座位号顺序展示（A1、A2、A3...），避免受检测框位置波动影响
   const orderedSeats = [...seats].sort((a, b) => {
-    const aBox = Array.isArray(a?.seat_bbox) && a.seat_bbox.length === 4 ? a.seat_bbox : null;
-    const bBox = Array.isArray(b?.seat_bbox) && b.seat_bbox.length === 4 ? b.seat_bbox : null;
+    const aLabel = String(a?.seat_number || "");
+    const bLabel = String(b?.seat_number || "");
+    const aMatch = aLabel.match(/^([^\d]*)(\d+)$/);
+    const bMatch = bLabel.match(/^([^\d]*)(\d+)$/);
 
-    if (aBox && bBox) {
-      const aCenterY = (Number(aBox[1]) + Number(aBox[3])) / 2;
-      const bCenterY = (Number(bBox[1]) + Number(bBox[3])) / 2;
-      const aCenterX = (Number(aBox[0]) + Number(aBox[2])) / 2;
-      const bCenterX = (Number(bBox[0]) + Number(bBox[2])) / 2;
-
-      // 同一“行”容差，避免轻微检测抖动导致顺序跳动
-      if (Math.abs(aCenterY - bCenterY) <= 24) {
-        return aCenterX - bCenterX;
-      }
-      return aCenterY - bCenterY;
+    const aPrefix = aMatch?.[1] || "";
+    const bPrefix = bMatch?.[1] || "";
+    if (aPrefix !== bPrefix) {
+      return aPrefix.localeCompare(bPrefix, "zh-CN");
     }
 
-    if (aBox && !bBox) return -1;
-    if (!aBox && bBox) return 1;
+    const aNum = aMatch ? Number(aMatch[2]) : (Number(a?.seat_id) || 0);
+    const bNum = bMatch ? Number(bMatch[2]) : (Number(b?.seat_id) || 0);
+    if (aNum !== bNum) return aNum - bNum;
 
-    const aNum = Number(String(a?.seat_number || "").replace(/\D/g, "")) || Number(a?.seat_id) || 0;
-    const bNum = Number(String(b?.seat_number || "").replace(/\D/g, "")) || Number(b?.seat_id) || 0;
-    return aNum - bNum;
+    return aLabel.localeCompare(bLabel, "zh-CN", { numeric: true });
   });
 
   const freeSeats = orderedSeats.filter((seat) => Number(seat?.status) === 0);
