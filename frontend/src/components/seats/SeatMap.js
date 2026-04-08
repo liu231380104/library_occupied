@@ -167,6 +167,8 @@ const SeatMap = () => {
     setSelectedArea(area);
     setAutoReserveHint("");
     setAutoReserveRecommendations([]);
+    setHoveredSeatId(null);
+    setFocusedSeatId(null);
     setLoading(true);
     fetchSeats(area);
   };
@@ -313,7 +315,9 @@ const SeatMap = () => {
   });
 
   const freeSeats = orderedSeats.filter((seat) => Number(seat?.status) === 0);
-  const highlightedSeatId = focusedSeatId;
+  const highlightedSeatId = Number.isInteger(Number(hoveredSeatId))
+    ? Number(hoveredSeatId)
+    : (Number.isInteger(Number(focusedSeatId)) ? Number(focusedSeatId) : null);
   const recommendedSeatRankMap = new Map(
     autoReserveRecommendations.map((item) => [Number(item?.seat_id), Number(item?.rank) || null]),
   );
@@ -482,56 +486,31 @@ const SeatMap = () => {
         area: selectedArea || undefined,
         mode: autoReserveMode,
         strictQuiet: autoReserveMode === "quiet" ? strictQuietMode : false,
-        previewOnly: true,
       });
-      const recommendations = Array.isArray(response?.data?.recommendations)
-        ? response.data.recommendations
+      const pickedSeat = response?.data?.seat || null;
+      const pickedSeatId = Number(pickedSeat?.seat_id);
+      const reasons = Array.isArray(response?.data?.strategy?.reasons)
+        ? response.data.strategy.reasons
         : [];
-      if (recommendations.length === 0 && response?.data?.seat?.seat_id) {
-        setAutoReserveHint("后端当前仍在执行旧版直接预约逻辑，请重启后端服务后重试推荐预览。");
-        return;
+
+      if (Number.isInteger(pickedSeatId)) {
+        setFocusedSeatId(pickedSeatId);
+        setHoveredSeatId(pickedSeatId);
       }
-      setAutoReserveRecommendations(recommendations);
-      if (recommendations.length > 0) {
-        const top = recommendations[0];
-        const topReasons = Array.isArray(top?.reasons) ? top.reasons.join("，") : "";
-        setAutoReserveHint(
-          `已生成 ${recommendations.length} 个推荐，首选 ${top.area}${top.seat_number}${topReasons ? `（${topReasons}）` : ""}`,
-        );
-      } else {
-        setAutoReserveHint(response?.data?.message || "暂无可推荐座位");
-      }
+
+      const reasonText = reasons.length > 0 ? `（${reasons.join("，")}）` : "";
+      const msg = response?.data?.message
+        || (pickedSeat
+          ? `已为您自动预约 ${pickedSeat.area}${pickedSeat.seat_number}，系统将保留15分钟${reasonText}`
+          : "智能预约成功");
+
+      setAutoReserveHint(msg);
+      alert(msg);
+      await fetchSeats(selectedArea);
     } catch (err) {
-      alert(err.response?.data?.message || "一键预约失败，请稍后重试");
+      alert(err.response?.data?.message || "智能预约失败，请稍后重试");
     } finally {
       setAutoReserving(false);
-    }
-  };
-
-  const handlePickRecommendedSeat = (recommendation) => {
-    const seatId = Number(recommendation?.seat_id);
-    if (!Number.isInteger(seatId)) return;
-
-    const seat = seats.find((item) => Number(item?.seat_id) === seatId);
-    if (!seat || Number(seat.status) !== 0) {
-      alert("该推荐座位状态已变化，请重新生成推荐");
-      fetchSeats(selectedArea);
-      return;
-    }
-
-    const isSameFocusedSeat = Number(focusedSeatId) === seatId;
-    const isSameSelectedSeat = Number(selectedSeat?.seat_id) === seatId;
-
-    setFocusedSeatId(seatId);
-    setHoveredSeatId(seatId);
-    setSelectedSeat(seat);
-
-    // 第一次点击仅定位高亮，第二次点击同一推荐才弹出预约确认
-    if (isSameFocusedSeat && isSameSelectedSeat) {
-      setShowReservationForm(true);
-    } else {
-      setShowReservationForm(false);
-      setAutoReserveHint(`已定位 ${seat.area}${seat.seat_number}，再次点击该推荐可弹出预约确认`);
     }
   };
 
@@ -618,7 +597,7 @@ const SeatMap = () => {
                   opacity: autoReserving ? 0.8 : 1,
                 }}
               >
-                {autoReserving ? "生成中..." : "生成智能推荐"}
+                {autoReserving ? "预约中..." : "智能推荐并预约"}
               </button>
             </>
           )}
@@ -680,42 +659,6 @@ const SeatMap = () => {
             }}
           >
             {autoReserveHint}
-          </div>
-        )}
-        {role !== "admin" && autoReserveRecommendations.length > 0 && (
-          <div
-            style={{
-              width: "100%",
-              marginBottom: "8px",
-              padding: "10px",
-              borderRadius: "8px",
-              border: `1px solid ${THEME.primary}`,
-              background: "#e7edf2",
-            }}
-          >
-            <div style={{ fontWeight: 700, marginBottom: "8px", color: "#425867" }}>
-              智能推荐座位（先定位高亮，再次点击同一项确认预约）
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-              {autoReserveRecommendations.map((item) => (
-                <button
-                  key={`auto-rec-${item.seat_id}`}
-                  onClick={() => handlePickRecommendedSeat(item)}
-                  style={{
-                    border: `1px solid ${THEME.primary}`,
-                    borderRadius: "6px",
-                    padding: "6px 10px",
-                    background: "#fff",
-                    color: "#425867",
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
-                  title={Array.isArray(item?.reasons) ? item.reasons.join("，") : ""}
-                >
-                  {item.rank}. {item.area}{item.seat_number}
-                </button>
-              ))}
-            </div>
           </div>
         )}
         <div
@@ -873,6 +816,8 @@ const SeatMap = () => {
                   return (
                     <div
                       key={`map-box-${seat.seat_id}`}
+                      onMouseEnter={() => setHoveredSeatId(seat.seat_id)}
+                      onMouseLeave={() => setHoveredSeatId(null)}
                       style={{
                         position: "absolute",
                         left: `${x1 * sx}px`,
@@ -886,9 +831,11 @@ const SeatMap = () => {
                           ? "rgba(47, 127, 120, 0.24)"
                           : "rgba(255,255,255,0.08)",
                         boxSizing: "border-box",
-                        pointerEvents: "none",
+                        pointerEvents: "auto",
                         overflow: "hidden",
+                        cursor: "pointer",
                       }}
+                      title={`${seat.seat_number} - ${getStatusText(seat.status)}`}
                     >
                       {seat.item_occupied_since && Number(seat.status) !== 0 && (
                         <div
