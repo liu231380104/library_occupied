@@ -22,6 +22,9 @@ const THEME = {
 };
 
 const LEAVE_ITEM_TIMEOUT_MINUTES = 15;
+const ADMIN_DETECT_TIMEOUT_MS = 15 * 60 * 1000;
+const ADMIN_DETECT_MAX_FRAMES = 1800;
+const ADMIN_DETECT_INTERVAL = 8;
 
 const SeatMap = () => {
   const [role, setRole] = useState(null);
@@ -52,6 +55,7 @@ const SeatMap = () => {
   const [autoReserveRecommendations, setAutoReserveRecommendations] = useState([]);
   const [previewCacheKey, setPreviewCacheKey] = useState(Date.now());
   const [lastDetectionAt, setLastDetectionAt] = useState(null);
+  const [detectionRunning, setDetectionRunning] = useState(false);
   const [adminMonitorVideoUrl, setAdminMonitorVideoUrl] = useState("");
   const [adminMonitorVideoError, setAdminMonitorVideoError] = useState("");
   const [nowTs, setNowTs] = useState(Date.now());
@@ -102,9 +106,11 @@ const SeatMap = () => {
   const fetchDetectionStatus = async () => {
     try {
       const response = await api.get("/detection/status", { params: { _: Date.now() } });
+      setDetectionRunning(Boolean(response?.data?.detectionRunning));
       const ts = Number(response?.data?.lastDetectionAt);
       setLastDetectionAt(Number.isFinite(ts) && ts > 0 ? ts : null);
     } catch (err) {
+      setDetectionRunning(false);
       setLastDetectionAt(null);
     }
   };
@@ -165,12 +171,14 @@ const SeatMap = () => {
 
     refreshSeatPanel();
 
+    const intervalMs = detectionRunning ? 2500 : 8000;
+
     const timer = setInterval(() => {
       refreshSeatPanel();
-    }, 8000);
+    }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [selectedArea, role]);
+  }, [selectedArea, role, detectionRunning]);
 
   useEffect(() => {
     if (!selectedArea || typeof EventSource === "undefined") return undefined;
@@ -636,8 +644,11 @@ const SeatMap = () => {
                       {
                         area: selectedArea || "A区",
                         saveVideo: true,
+                        maxFrames: ADMIN_DETECT_MAX_FRAMES,
+                        detectInterval: ADMIN_DETECT_INTERVAL,
+                        timeoutMs: ADMIN_DETECT_TIMEOUT_MS,
                       },
-                      { timeout: 300000 },
+                      { timeout: ADMIN_DETECT_TIMEOUT_MS },
                     );
                     const latestVideoUrl = resp?.data?.videoUrl || "";
                     if (latestVideoUrl) {

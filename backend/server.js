@@ -815,12 +815,32 @@ app.post("/api/detect-occupation", async (req, res) => {
       Number.isFinite(requestedDetectIntervalRaw) && requestedDetectIntervalRaw > 0
         ? Math.floor(Math.min(Math.max(requestedDetectIntervalRaw, 1), 30))
         : (requestedMaxFrames === 0 ? 8 : 4);
+    const requestedTimeoutRaw = Number(req.body?.timeoutMs);
+    const requestedTimeoutMs = Number.isFinite(requestedTimeoutRaw) && requestedTimeoutRaw > 0
+      ? Math.floor(requestedTimeoutRaw)
+      : 0;
+
+    // 给长视频留更充足的执行时间，避免前后端超时不一致导致中途失败。
+    const estimatedByFrames = requestedMaxFrames > 0
+      ? 240000 + Math.floor((requestedMaxFrames / Math.max(requestedDetectInterval, 1)) * 900)
+      : 900000;
+    const effectiveTimeoutMs = Math.max(
+      300000,
+      Math.min(
+        20 * 60 * 1000,
+        requestedTimeoutMs > 0 ? requestedTimeoutMs : estimatedByFrames,
+      ),
+    );
+
+    req.setTimeout(effectiveTimeoutMs + 30000);
+    res.setTimeout(effectiveTimeoutMs + 30000);
+
     const result = await runSeatDetection({
       videoPath,
       area,
       maxFrames: requestedMaxFrames,
       detectInterval: requestedDetectInterval,
-      timeoutMs: requestedMaxFrames === 0 ? 600000 : 300000,
+      timeoutMs: effectiveTimeoutMs,
       saveVideo,
     });
     res.json({

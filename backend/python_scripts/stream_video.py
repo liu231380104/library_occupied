@@ -186,7 +186,9 @@ def main():
     frame_idx = 0
     frames_written = 0
     occupy_threshold = max(1, int(args.occupy_thr or 1))
-    occupied_counter = [0 for _ in seats]
+    occupied_streak = [0 for _ in seats]
+    empty_streak = [0 for _ in seats]
+    stable_occupied = [False for _ in seats]
     latest_state_by_index = [None for _ in seats]
     occupied_seats = []
     seat_states = []
@@ -209,14 +211,26 @@ def main():
                         args.imgsz,
                         args.conf,
                     )
-                current_occupied = set(detection_result["occupiedIndices"])
                 for state in detection_result["seatStates"]:
                     seat_index = int(state.get("index", -1))
                     if seat_index < 0 or seat_index >= len(seats):
                         continue
-                    if state.get("occupied"):
-                        occupied_counter[seat_index] += 1
-                        latest_state_by_index[seat_index] = state
+                    is_occupied_now = bool(state.get("occupied"))
+                    latest_state_by_index[seat_index] = state
+                    if is_occupied_now:
+                        occupied_streak[seat_index] += 1
+                        empty_streak[seat_index] = 0
+                    else:
+                        empty_streak[seat_index] += 1
+                        occupied_streak[seat_index] = 0
+
+                    # 连续占用达到阈值才置为占座；连续空闲达到阈值再恢复为空闲
+                    if occupied_streak[seat_index] >= occupy_threshold:
+                        stable_occupied[seat_index] = True
+                    elif empty_streak[seat_index] >= occupy_threshold:
+                        stable_occupied[seat_index] = False
+
+                current_occupied = {idx for idx, flag in enumerate(stable_occupied) if flag}
         else:
             # 默认兼容旧逻辑：只在第300帧（10秒）检测一次
             if frame_idx == 299:
@@ -229,14 +243,25 @@ def main():
                     args.imgsz,
                     args.conf,
                 )
-                current_occupied = set(detection_result["occupiedIndices"])
                 for state in detection_result["seatStates"]:
                     seat_index = int(state.get("index", -1))
                     if seat_index < 0 or seat_index >= len(seats):
                         continue
-                    if state.get("occupied"):
-                        occupied_counter[seat_index] += 1
-                        latest_state_by_index[seat_index] = state
+                    is_occupied_now = bool(state.get("occupied"))
+                    latest_state_by_index[seat_index] = state
+                    if is_occupied_now:
+                        occupied_streak[seat_index] += 1
+                        empty_streak[seat_index] = 0
+                    else:
+                        empty_streak[seat_index] += 1
+                        occupied_streak[seat_index] = 0
+
+                    if occupied_streak[seat_index] >= occupy_threshold:
+                        stable_occupied[seat_index] = True
+                    elif empty_streak[seat_index] >= occupy_threshold:
+                        stable_occupied[seat_index] = False
+
+                current_occupied = {idx for idx, flag in enumerate(stable_occupied) if flag}
 
         # 始终绘制高对比座位框，便于在压缩后视频中观察
         for i, seat in enumerate(seats):
@@ -273,7 +298,7 @@ def main():
         print(json.dumps({"error": "未写入任何视频帧，输出视频为空"}))
         return
 
-    occupied_seats = [index for index, count in enumerate(occupied_counter) if count >= occupy_threshold]
+    occupied_seats = [index for index, flag in enumerate(stable_occupied) if flag]
     seat_states = []
     occupied_set = set(occupied_seats)
     for index, _seat in enumerate(seats):

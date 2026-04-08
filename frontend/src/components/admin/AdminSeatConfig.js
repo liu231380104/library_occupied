@@ -16,9 +16,9 @@ const THEME = {
 const PREVIEW_MEDIA_MAX_WIDTH = 1200;
 const LEAVE_ITEM_TIMEOUT_MINUTES = 15;
 const DEFAULT_SEAT_DETECT_FRAME = 0;
-const DETECT_REQUEST_TIMEOUT_MS = 12 * 60 * 1000;
-const DETECT_MAX_FRAMES = 2400;
-const DETECT_INTERVAL = 6;
+const DETECT_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+const DETECT_MAX_FRAMES = 1800;
+const DETECT_INTERVAL = 8;
 
 const PAGE_STYLE = {
   maxWidth: "1400px",
@@ -262,6 +262,7 @@ const AdminSeatConfig = () => {
           saveVideo: true,
           maxFrames: DETECT_MAX_FRAMES,
           detectInterval: DETECT_INTERVAL,
+          timeoutMs: DETECT_REQUEST_TIMEOUT_MS,
         },
         { timeout: DETECT_REQUEST_TIMEOUT_MS },
       );
