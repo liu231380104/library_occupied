@@ -42,42 +42,57 @@ const AdminLogin = () => {
   return (
     <div
       style={{
-        maxWidth: "400px",
-        margin: "50px auto",
-        padding: "20px",
-        border: "1px solid #d8d2c9",
-        borderRadius: "8px",
-        backgroundColor: "#fcfbf8",
+        minHeight: "100vh",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        padding: "0 16px",
+        boxSizing: "border-box",
       }}
     >
-      <h2>管理员登录</h2>
-      <form onSubmit={handleSubmit}>
-        <div>
-          <label>管理员用户名:</label>
-          <input
-            type="text"
-            name="username"
-            value={formData.username}
-            onChange={handleChange}
-            required
-          />
-        </div>
-        <div>
-          <label>密码:</label>
-          <input
-            type="password"
-            name="password"
-            value={formData.password}
-            onChange={handleChange}
-            required
-          />
-        </div>
-        <button type="submit" style={{ background: "#7f95a6", color: "#fff", border: "none", borderRadius: "6px", padding: "8px 14px", marginTop: "10px", cursor: "pointer" }}>登录</button>
-      </form>
-      {message && <p>{message}</p>}
-      <p>
-        <a href="/login">返回用户登录</a>
-      </p>
+      <div
+        style={{
+          maxWidth: "400px",
+          margin: "0 auto",
+          padding: "20px",
+          border: "1px solid #d8d2c9",
+          borderRadius: "8px",
+          backgroundColor: "#fcfbf8",
+          boxSizing: "border-box",
+          transform: "translateY(-14px)",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>管理员登录</h2>
+        <form onSubmit={handleSubmit}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+            <label style={{ width: "64px", flexShrink: 0 }}>用户名:</label>
+            <input
+              type="text"
+              name="username"
+              value={formData.username}
+              onChange={handleChange}
+              required
+              style={{ flex: 1, minWidth: 0, boxSizing: "border-box" }}
+            />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+            <label style={{ width: "64px", flexShrink: 0 }}>密码:</label>
+            <input
+              type="password"
+              name="password"
+              value={formData.password}
+              onChange={handleChange}
+              required
+              style={{ flex: 1, minWidth: 0, boxSizing: "border-box" }}
+            />
+          </div>
+          <button type="submit" style={{ background: "#7f95a6", color: "#fff", border: "none", borderRadius: "6px", padding: "8px 14px", marginTop: "10px", cursor: "pointer" }}>登录</button>
+        </form>
+        {message && <p>{message}</p>}
+        <p>
+          <a href="/login">返回用户登录</a>
+        </p>
+      </div>
     </div>
   );
 };

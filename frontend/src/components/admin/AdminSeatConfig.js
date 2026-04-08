@@ -16,6 +16,9 @@ const THEME = {
 const PREVIEW_MEDIA_MAX_WIDTH = 1200;
 const LEAVE_ITEM_TIMEOUT_MINUTES = 15;
 const DEFAULT_SEAT_DETECT_FRAME = 0;
+const DETECT_REQUEST_TIMEOUT_MS = 12 * 60 * 1000;
+const DETECT_MAX_FRAMES = 2400;
+const DETECT_INTERVAL = 6;
 
 const PAGE_STYLE = {
   maxWidth: "1400px",
@@ -253,8 +256,14 @@ const AdminSeatConfig = () => {
       setFlowHint("检测任务已启动，处理中请稍候...");
       const resp = await api.post(
         "/detect-occupation",
-        { videoPath, area, saveVideo: true },
-        { timeout: 300000 },
+        {
+          videoPath,
+          area,
+          saveVideo: true,
+          maxFrames: DETECT_MAX_FRAMES,
+          detectInterval: DETECT_INTERVAL,
+        },
+        { timeout: DETECT_REQUEST_TIMEOUT_MS },
       );
       const result = resp.data || {};
       setLatestOccupation(result);
@@ -280,7 +289,7 @@ const AdminSeatConfig = () => {
       setFlowStep("saved");
       setFlowHint("检测失败，请修正问题后重试。");
       if (err.code === "ECONNABORTED") {
-        alert("占座检测超时，请缩短视频长度或稍后重试");
+        alert("占座检测超时，请重试；若仍超时，可缩短视频或进一步减少检测帧数");
         return;
       }
       alert(err.response?.data?.error || "占座检测失败");
