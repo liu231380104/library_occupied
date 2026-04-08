@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const fs = require("fs");
 const path = require("path");
 const db = require("../config/db");
+const { broadcastSeatUpdate } = require("../utils/seatEvents");
 const {
   getCreditReminder,
   syncUserStatusByCredit,
@@ -244,6 +245,14 @@ const expireOverduePendingReservations = async (connection) => {
     seatIds,
   ]);
 
+  const uniqueAreas = Array.from(
+    new Set(
+      overdueRows
+        .map((row) => String(row.area || "").trim())
+        .filter(Boolean),
+    ),
+  );
+
   await connection.query(
     `UPDATE users
      SET credit_score = GREATEST(0, credit_score - 5)
@@ -268,6 +277,15 @@ const expireOverduePendingReservations = async (connection) => {
     });
   }
 
+  for (const area of uniqueAreas) {
+    broadcastSeatUpdate({
+      area,
+      source: "reservation",
+      reason: "pending-overdue-expired",
+      seatIds,
+    });
+  }
+
   await syncUserStatusesByCredit(connection, userIds);
 };
 
@@ -281,14 +299,94 @@ const expirePendingPresencePrompts = async (connection) => {
   );
 };
 
-// 处理长时间未响应的离座确认提示
+// 处理长时间未响应的离座确认提示：超时自动释放座位
 const expirePendingLeavePrompts = async (connection) => {
+  const [expiredPrompts] = await connection.query(
+    `SELECT 
+       p.prompt_id, p.reservation_id, p.user_id, p.seat_id,
+       r.res_status,
+       COALESCE(s.seat_number, CONCAT('已删除座位#', p.seat_id)) AS seat_number,
+       COALESCE(s.area, '历史区域') AS area
+     FROM reservation_leave_prompts p
+     JOIN reservations r ON p.reservation_id = r.reservation_id
+     LEFT JOIN seats s ON p.seat_id = s.seat_id
+     WHERE p.prompt_status = 'pending'
+       AND p.created_at <= DATE_SUB(NOW(), INTERVAL 3 MINUTE)`,
+  );
+
+  if (expiredPrompts.length === 0) {
+    return;
+  }
+
+  const promptIds = expiredPrompts.map((p) => p.prompt_id);
+  const reservationIds = expiredPrompts.map((p) => p.reservation_id);
+  const seatIds = expiredPrompts.map((p) => p.seat_id);
+  const uniqueAreas = Array.from(
+    new Set(
+      expiredPrompts
+        .map((p) => String(p.area || "").trim())
+        .filter(Boolean),
+    ),
+  );
+
+  // 标记所有超时提示为 expired
   await connection.query(
     `UPDATE reservation_leave_prompts
      SET prompt_status = 'expired', responded_at = NOW()
-     WHERE prompt_status = 'pending'
-       AND created_at <= DATE_SUB(NOW(), INTERVAL 3 MINUTE)`,
+     WHERE prompt_id IN (?)`,
+    [promptIds],
   );
+
+  // 对只有活跃预约的座位，自动释放
+  const activePrompts = expiredPrompts.filter((p) => p.res_status === "active");
+  if (activePrompts.length > 0) {
+    const activeReservationIds = activePrompts.map((p) => p.reservation_id);
+    const activeSeatIds = activePrompts.map((p) => p.seat_id);
+
+    // 标记预约为已完成
+    await connection.query(
+      `UPDATE reservations
+       SET res_status = 'completed', end_time = NOW()
+       WHERE reservation_id IN (?)`,
+      [activeReservationIds],
+    );
+
+    // 清理座位状态
+    await connection.query(
+      `UPDATE seats SET status = 0, item_occupied_since = NULL
+       WHERE seat_id IN (?)`,
+      [activeSeatIds],
+    );
+
+    // 发送释放通知给用户
+    for (const prompt of activePrompts) {
+      await upsertNotificationHistory(connection, {
+        userId: prompt.user_id,
+        eventType: "warning",
+        title: "离座超时自动释放",
+        message: `系统检测到你在${prompt.area}${prompt.seat_number}离开后未在3分钟内响应确认提示，座位已自动释放。`,
+        source: "leave-timeout-auto",
+        sourceKey: `auto-released-${prompt.prompt_id}`,
+        payload: {
+          promptId: prompt.prompt_id,
+          reservationId: prompt.reservation_id,
+          seatId: prompt.seat_id,
+          seatNumber: prompt.seat_number,
+          area: prompt.area,
+        },
+      });
+    }
+
+    // 广播座位更新事件
+    for (const area of uniqueAreas) {
+      broadcastSeatUpdate({
+        area,
+        source: "reservation",
+        reason: "leave-prompt-auto-released",
+        seatIds: activeSeatIds,
+      });
+    }
+  }
 };
 
 // 中间件：验证JWT token
@@ -390,6 +488,13 @@ router.post("/", authenticateToken, async (req, res) => {
         seatNumber: seatInfo.seat_number,
         area: seatInfo.area,
       },
+    });
+
+    broadcastSeatUpdate({
+      area: seatInfo.area,
+      source: "reservation",
+      reason: "manual-reserve-created",
+      seatId,
     });
 
     res.status(201).json({
@@ -756,6 +861,13 @@ router.post("/auto", authenticateToken, async (req, res) => {
 
       await tx.commit();
 
+      broadcastSeatUpdate({
+        area: pickedSeat.area,
+        source: "reservation",
+        reason: "auto-reserve-created",
+        seatId: pickedSeat.seat_id,
+      });
+
       res.status(201).json({
         message: `已为您自动预约 ${pickedSeat.area}${pickedSeat.seat_number}，系统将保留15分钟`,
         reservationId: result.insertId,
@@ -950,9 +1062,10 @@ router.post("/leave-prompts/:promptId/respond", authenticateToken, async (req, r
 
       const [rows] = await tx.query(
         `SELECT p.prompt_id, p.prompt_status, p.reservation_id, p.seat_id,
-                r.res_status
+          r.res_status, COALESCE(s.area, '历史区域') AS area
          FROM reservation_leave_prompts p
          JOIN reservations r ON r.reservation_id = p.reservation_id
+         LEFT JOIN seats s ON s.seat_id = p.seat_id
          WHERE p.prompt_id = ? AND p.user_id = ?
          LIMIT 1
          FOR UPDATE`,
@@ -1007,6 +1120,12 @@ router.post("/leave-prompts/:promptId/respond", authenticateToken, async (req, r
         });
 
         await tx.commit();
+        broadcastSeatUpdate({
+          area: prompt.area,
+          source: "reservation",
+          reason: "leave-prompt-released",
+          seatId: prompt.seat_id,
+        });
         return res.json({ message: "已确认离开，座位已释放" });
       }
 
@@ -1035,6 +1154,12 @@ router.post("/leave-prompts/:promptId/respond", authenticateToken, async (req, r
       });
 
       await tx.commit();
+      broadcastSeatUpdate({
+        area: prompt.area,
+        source: "reservation",
+        reason: "leave-prompt-retained",
+        seatId: prompt.seat_id,
+      });
       return res.json({ message: "已保留座位，祝你使用愉快" });
     } catch (txError) {
       try {
@@ -1088,6 +1213,13 @@ router.delete("/:reservationId", authenticateToken, async (req, res) => {
     await connection.query("UPDATE seats SET status = 0 WHERE seat_id = ?", [
       reservation.seat_id,
     ]);
+
+    broadcastSeatUpdate({
+      area: reservation.area,
+      source: "reservation",
+      reason: "reservation-cancelled",
+      seatId: reservation.seat_id,
+    });
 
     await upsertNotificationHistory(connection, {
       userId,
@@ -1145,6 +1277,13 @@ router.post("/:reservationId/checkin", authenticateToken, async (req, res) => {
     await connection.query("UPDATE seats SET status = 2 WHERE seat_id = ?", [
       reservation.seat_id,
     ]);
+
+    broadcastSeatUpdate({
+      area: reservation.area,
+      source: "reservation",
+      reason: "checkin-completed",
+      seatId: reservation.seat_id,
+    });
 
     // 入座奖励：信誉分+2，最高100分
     await connection.query(
@@ -1224,6 +1363,13 @@ router.post("/:reservationId/leave", authenticateToken, async (req, res) => {
     await connection.query("UPDATE seats SET status = 0 WHERE seat_id = ?", [
       reservation.seat_id,
     ]);
+
+    broadcastSeatUpdate({
+      area: reservation.area,
+      source: "reservation",
+      reason: "leave-completed",
+      seatId: reservation.seat_id,
+    });
 
     await upsertNotificationHistory(connection, {
       userId,

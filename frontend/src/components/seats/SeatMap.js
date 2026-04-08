@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import api from "../../services/api";
 import { getUserRole } from "../../utils/tokenUtils";
 
@@ -55,6 +55,8 @@ const SeatMap = () => {
   const [adminMonitorVideoUrl, setAdminMonitorVideoUrl] = useState("");
   const [adminMonitorVideoError, setAdminMonitorVideoError] = useState("");
   const [nowTs, setNowTs] = useState(Date.now());
+  const refreshLockRef = useRef(false);
+  const pendingRefreshRef = useRef(false);
 
   useEffect(() => {
     // 从 token 解析 role
@@ -134,32 +136,61 @@ const SeatMap = () => {
     }
   };
 
+  const refreshSeatPanel = async () => {
+    if (!selectedArea) return;
+
+    if (refreshLockRef.current) {
+      pendingRefreshRef.current = true;
+      return;
+    }
+
+    refreshLockRef.current = true;
+    try {
+      const jobs = [fetchSeats(selectedArea), fetchDetectionStatus()];
+      if (role === "admin") {
+        jobs.push(fetchAdminMonitorVideo());
+      }
+      await Promise.all(jobs);
+    } finally {
+      refreshLockRef.current = false;
+      if (pendingRefreshRef.current) {
+        pendingRefreshRef.current = false;
+        refreshSeatPanel();
+      }
+    }
+  };
+
   useEffect(() => {
     if (!selectedArea) return undefined;
 
-    let polling = false;
-
-    const refreshSeatsOnly = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const jobs = [fetchSeats(selectedArea), fetchDetectionStatus()];
-        if (role === "admin") {
-          jobs.push(fetchAdminMonitorVideo());
-        }
-        await Promise.all(jobs);
-      } finally {
-        polling = false;
-      }
-    };
-
-    refreshSeatsOnly();
+    refreshSeatPanel();
 
     const timer = setInterval(() => {
-      refreshSeatsOnly();
-    }, 10000);
+      refreshSeatPanel();
+    }, 8000);
 
     return () => clearInterval(timer);
+  }, [selectedArea, role]);
+
+  useEffect(() => {
+    if (!selectedArea || typeof EventSource === "undefined") return undefined;
+
+    const streamUrl = `http://localhost:5000/api/seats/stream?area=${encodeURIComponent(selectedArea)}&_=${Date.now()}`;
+    const source = new EventSource(streamUrl);
+
+    const handleSeatUpdate = () => {
+      refreshSeatPanel();
+    };
+
+    source.addEventListener("seat-update", handleSeatUpdate);
+    source.onerror = () => {
+      // 失败时依赖上面的轮询兜底
+    };
+
+    return () => {
+      source.removeEventListener("seat-update", handleSeatUpdate);
+      source.close();
+    };
   }, [selectedArea, role]);
 
   const handleAreaChange = (e) => {
