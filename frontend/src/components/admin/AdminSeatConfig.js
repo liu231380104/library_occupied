@@ -149,6 +149,7 @@ const AdminSeatConfig = () => {
   const imgRef = useRef(null);
   const previewPanelRef = useRef(null);
   const fileInputRef = useRef(null);
+  // simulated-samples UI removed
 
   const flowProgress = FLOW_STEP_PROGRESS[flowStep] ?? 0;
 
@@ -589,6 +590,8 @@ const AdminSeatConfig = () => {
   const filteredSeatRows = seats
     .map((seat, idx) => ({ seat, idx, label: `${prefix}${idx + 1}` }))
     .filter((item) => item.label.toLowerCase().includes(normalizedSeatSearch));
+
+  // simulated-samples endpoints and UI have been removed
 
   return (
     <div style={PAGE_STYLE}>
@@ -1123,6 +1126,8 @@ const AdminSeatConfig = () => {
             </div>
           )}
         </div>
+
+        {/* simulated-samples UI removed */}
       </div>
     </div>
   );

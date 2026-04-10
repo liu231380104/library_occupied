@@ -22,9 +22,6 @@ const THEME = {
 };
 
 const LEAVE_ITEM_TIMEOUT_MINUTES = 15;
-const ADMIN_DETECT_TIMEOUT_MS = 15 * 60 * 1000;
-const ADMIN_DETECT_MAX_FRAMES = 1800;
-const ADMIN_DETECT_INTERVAL = 8;
 
 const SeatMap = () => {
   const [role, setRole] = useState(null);
@@ -56,8 +53,6 @@ const SeatMap = () => {
   const [previewCacheKey, setPreviewCacheKey] = useState(Date.now());
   const [lastDetectionAt, setLastDetectionAt] = useState(null);
   const [detectionRunning, setDetectionRunning] = useState(false);
-  const [adminMonitorVideoUrl, setAdminMonitorVideoUrl] = useState("");
-  const [adminMonitorVideoError, setAdminMonitorVideoError] = useState("");
   const [nowTs, setNowTs] = useState(Date.now());
   const refreshLockRef = useRef(false);
   const pendingRefreshRef = useRef(false);
@@ -69,13 +64,19 @@ const SeatMap = () => {
     fetchAreas();
   }, []);
 
-  const fetchAreas = async () => {
+  const fetchAreas = async (preferredArea = "") => {
     try {
       const response = await api.get("/seats/areas");
       const dbAreas = response.data || [];
       setAreas(dbAreas);
 
-      const defaultArea = dbAreas[0] || "";
+      const current = String(selectedArea || "").trim();
+      const preferred = String(preferredArea || "").trim();
+      const defaultArea =
+        (preferred && dbAreas.includes(preferred) && preferred)
+        || (current && dbAreas.includes(current) && current)
+        || dbAreas[0]
+        || "";
       setSelectedArea(defaultArea);
       if (defaultArea) {
         fetchSeats(defaultArea);
@@ -88,6 +89,21 @@ const SeatMap = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const handleSeatConfigSynced = (evt) => {
+      const area = String(evt?.detail?.area || "").trim();
+      setLoading(true);
+      fetchAreas(area);
+      if (area) {
+        setSelectedArea(area);
+        fetchSeats(area);
+      }
+    };
+
+    window.addEventListener("seatConfigSynced", handleSeatConfigSynced);
+    return () => window.removeEventListener("seatConfigSynced", handleSeatConfigSynced);
+  }, [selectedArea]);
 
   const fetchSeats = async (area) => {
     try {
@@ -103,42 +119,24 @@ const SeatMap = () => {
     }
   };
 
-  const fetchDetectionStatus = async () => {
+  const fetchSimulationStatus = async () => {
     try {
-      const response = await api.get("/detection/status", { params: { _: Date.now() } });
-      setDetectionRunning(Boolean(response?.data?.detectionRunning));
-      const ts = Number(response?.data?.lastDetectionAt);
-      setLastDetectionAt(Number.isFinite(ts) && ts > 0 ? ts : null);
+      const response = await api.get("/simulate/status", { params: { _: Date.now() } });
+      const running = Boolean(response?.data?.isRunning);
+      setDetectionRunning(running);
+
+      const tsFromStatus = Number(response?.data?.timestamp);
+      const tsFromRealtime = Number(response?.data?.status?.currentRealTime);
+      if (Number.isFinite(tsFromStatus) && tsFromStatus > 0) {
+        setLastDetectionAt(tsFromStatus);
+      } else if (Number.isFinite(tsFromRealtime) && tsFromRealtime > 0) {
+        setLastDetectionAt(Math.floor(tsFromRealtime * 1000));
+      } else {
+        setLastDetectionAt(null);
+      }
     } catch (err) {
       setDetectionRunning(false);
       setLastDetectionAt(null);
-    }
-  };
-
-  const normalizeMonitorVideoUrl = (rawUrl) => {
-    if (!rawUrl || typeof rawUrl !== "string") return "";
-    const cleaned = rawUrl.trim().replace(/\\\\/g, "/");
-    const withoutDupPrefix = cleaned.replace("/python-assets/python_scripts/", "/python-assets/");
-    if (/^https?:\/\//i.test(withoutDupPrefix)) return withoutDupPrefix;
-    return withoutDupPrefix.startsWith("/") ? withoutDupPrefix : `/${withoutDupPrefix}`;
-  };
-
-  const fetchAdminMonitorVideo = async () => {
-    try {
-      const fromSession = sessionStorage.getItem("latestOccupationVideoUrl") || "";
-      if (fromSession) {
-        setAdminMonitorVideoUrl(normalizeMonitorVideoUrl(fromSession));
-      }
-
-      const resp = await api.get("/detect-occupation/latest", { params: { _: Date.now() } });
-      const latest = normalizeMonitorVideoUrl(resp?.data?.videoUrl || "");
-      if (latest) {
-        setAdminMonitorVideoUrl(latest);
-        sessionStorage.setItem("latestOccupationVideoUrl", latest);
-        setAdminMonitorVideoError("");
-      }
-    } catch (err) {
-      // latest 可能暂时 404，保留已加载的视频地址
     }
   };
 
@@ -152,10 +150,7 @@ const SeatMap = () => {
 
     refreshLockRef.current = true;
     try {
-      const jobs = [fetchSeats(selectedArea), fetchDetectionStatus()];
-      if (role === "admin") {
-        jobs.push(fetchAdminMonitorVideo());
-      }
+      const jobs = [fetchSeats(selectedArea), fetchSimulationStatus()];
       await Promise.all(jobs);
     } finally {
       refreshLockRef.current = false;
@@ -261,25 +256,7 @@ const SeatMap = () => {
     return () => clearInterval(timer);
   }, [hasActiveItemTimer]);
 
-  const formatItemOccupancyDuration = (startedAt) => {
-    if (!startedAt) return "";
-
-    const startedMs = new Date(startedAt).getTime();
-    if (!Number.isFinite(startedMs)) return "";
-
-    const elapsedSeconds = Math.max(0, Math.floor((nowTs - startedMs) / 1000));
-    const hours = Math.floor(elapsedSeconds / 3600);
-    const minutes = Math.floor((elapsedSeconds % 3600) / 60);
-    const seconds = elapsedSeconds % 60;
-    const pad = (value) => String(value).padStart(2, "0");
-
-    if (hours > 0) {
-      return `${hours}:${pad(minutes)}:${pad(seconds)}`;
-    }
-
-    return `${pad(minutes)}:${pad(seconds)}`;
-  };
-
+  // ...existing code...
   const formatItemLeaveCountdown = (startedAt) => {
     if (!startedAt) return "";
 
@@ -635,47 +612,19 @@ const SeatMap = () => {
             </>
           )}
           {role === "admin" && (
-            <>
-              <button
-                onClick={async () => {
-                  try {
-                    const resp = await api.post(
-                      "/detect-occupation",
-                      {
-                        area: selectedArea || "A区",
-                        saveVideo: true,
-                        maxFrames: ADMIN_DETECT_MAX_FRAMES,
-                        detectInterval: ADMIN_DETECT_INTERVAL,
-                        timeoutMs: ADMIN_DETECT_TIMEOUT_MS,
-                      },
-                      { timeout: ADMIN_DETECT_TIMEOUT_MS },
-                    );
-                    const latestVideoUrl = resp?.data?.videoUrl || "";
-                    if (latestVideoUrl) {
-                      sessionStorage.setItem("latestOccupationVideoUrl", latestVideoUrl);
-                      setAdminMonitorVideoUrl(normalizeMonitorVideoUrl(latestVideoUrl));
-                      setAdminMonitorVideoError("");
-                    }
-                    window.dispatchEvent(new CustomEvent("openAdminReports"));
-                    alert("占座检测完成，已跳转到举报中心查看视频结果");
-                    fetchSeats(selectedArea || "A区");
-                  } catch (err) {
-                    const msg = err.response?.data?.error || err.message || "检测失败";
-                    alert(msg);
-                  }
-                }}
-                style={{
-                  padding: "6px 12px",
-                  backgroundColor: THEME.primary,
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                }}
-              >
-                运行占座检测
-              </button>
-            </>
+            <button
+              onClick={() => refreshSeatPanel()}
+              style={{
+                padding: "6px 12px",
+                backgroundColor: THEME.primary,
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+              }}
+            >
+              刷新图片采样状态
+            </button>
           )}
         </div>
       </div>
@@ -781,7 +730,7 @@ const SeatMap = () => {
         <div style={{ minWidth: "520px", flex: "1 1 520px" }}>
           <h3 style={{ marginTop: 0, marginBottom: "8px" }}>座位图</h3>
           <div style={{ display: "flex", gap: "12px", alignItems: "stretch", flexWrap: "nowrap" }}>
-            {(role === "admin" && adminMonitorVideoUrl) || seatMapPreviewUrl ? (
+            {seatMapPreviewUrl ? (
               <div
                 style={{
                   position: "relative",
@@ -795,45 +744,11 @@ const SeatMap = () => {
                   flex: "0 0 auto",
                 }}
               >
-                {role === "admin" && adminMonitorVideoUrl ? (
-                  <video
-                    autoPlay
-                    muted
-                    controls
-                    playsInline
-                    onError={() => {
-                      setAdminMonitorVideoError("实时监控视频加载失败，请点击运行占座检测后重试。");
-                    }}
-                    src={/^https?:\/\//i.test(adminMonitorVideoUrl)
-                      ? adminMonitorVideoUrl
-                      : `http://localhost:5000${adminMonitorVideoUrl}`}
-                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                  />
-                ) : (
-                  <img
-                    src={seatMapPreviewUrl}
-                    alt="seat-map-preview"
-                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                  />
-                )}
-                {role === "admin" && adminMonitorVideoError && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      left: "8px",
-                      right: "8px",
-                      bottom: "8px",
-                      padding: "6px 8px",
-                      borderRadius: "6px",
-                      background: "rgba(183, 138, 132, 0.9)",
-                      color: "#fff",
-                      fontSize: "12px",
-                      lineHeight: 1.3,
-                    }}
-                  >
-                    {adminMonitorVideoError}
-                  </div>
-                )}
+                <img
+                  src={seatMapPreviewUrl}
+                  alt="seat-map-preview"
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                />
                 {seats.map((seat) => {
                   const bbox = Array.isArray(seat?.seat_bbox) ? seat.seat_bbox : null;
                   if (!bbox || bbox.length !== 4) return null;

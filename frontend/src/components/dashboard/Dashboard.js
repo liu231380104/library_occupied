@@ -7,6 +7,7 @@ import MyCreditStats from "../credit/MyCreditStats";
 import AdminCenter from "../admin/AdminCenter";
 import AdminCreditStats from "../admin/AdminCreditStats";
 import AdminSeatConfig from "../admin/AdminSeatConfig";
+import AdminSimulateMonitor from "../admin/AdminSimulateMonitor";
 import api from "../../services/api";
 import { getCurrentUser, getUserRole } from "../../utils/tokenUtils";
 
@@ -329,26 +330,46 @@ const Dashboard = () => {
               </button>
             </li>
           )}
-          {role === "admin" && (
-            <li>
-              <button
-                onClick={() => setActiveTab("adminSeatConfig")}
-                style={{
-                  width: "100%",
-                  marginBottom: "8px",
-                  padding: "8px",
-                  backgroundColor:
-                    activeTab === "adminSeatConfig" ? THEME.primary : "#fff",
-                  color: activeTab === "adminSeatConfig" ? THEME.primaryText : THEME.btnText,
-                  border: `1px solid ${THEME.border}`,
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                }}
-              >
-                视频座位配置
-              </button>
-            </li>
-          )}
+           {role === "admin" && (
+             <>
+               <li>
+                 <button
+                   onClick={() => setActiveTab("adminSeatConfig")}
+                   style={{
+                     width: "100%",
+                     marginBottom: "8px",
+                     padding: "8px",
+                     backgroundColor:
+                       activeTab === "adminSeatConfig" ? THEME.primary : "#fff",
+                     color: activeTab === "adminSeatConfig" ? THEME.primaryText : THEME.btnText,
+                     border: `1px solid ${THEME.border}`,
+                     borderRadius: "4px",
+                     cursor: "pointer",
+                   }}
+                 >
+                   视频座位配置
+                 </button>
+               </li>
+               <li>
+                 <button
+                   onClick={() => setActiveTab("simulateMonitor")}
+                   style={{
+                     width: "100%",
+                     marginBottom: "8px",
+                     padding: "8px",
+                     backgroundColor:
+                       activeTab === "simulateMonitor" ? THEME.primary : "#fff",
+                     color: activeTab === "simulateMonitor" ? THEME.primaryText : THEME.btnText,
+                     border: `1px solid ${THEME.border}`,
+                     borderRadius: "4px",
+                     cursor: "pointer",
+                   }}
+                 >
+                   图片采样监控
+                 </button>
+               </li>
+             </>
+           )}
         </ul>
         <div style={{ marginTop: "30px" }}>
           <button
@@ -415,18 +436,15 @@ const Dashboard = () => {
           </div>
         )}
 
-        {activeTab === "seatMap" && <SeatMap />}
-        {activeTab === "reservations" && <MyReservations />}
-        {activeTab === "notifications" && <MyNotifications />}
-        {activeTab === "myCredit" && <MyCreditStats />}
-        {activeTab === "myReports" && <MyReports />}
-        {activeTab === "adminReports" && <AdminCenter />}
-        {activeTab === "adminCredit" && <AdminCreditStats />}
-        {role === "admin" && keepAdminSeatConfigMounted && (
-          <div style={{ display: activeTab === "adminSeatConfig" ? "block" : "none" }}>
-            <AdminSeatConfig />
-          </div>
-        )}
+         {activeTab === "seatMap" && <SeatMap />}
+         {activeTab === "reservations" && <MyReservations />}
+         {activeTab === "notifications" && <MyNotifications />}
+         {activeTab === "myCredit" && <MyCreditStats />}
+         {activeTab === "myReports" && <MyReports />}
+         {activeTab === "adminReports" && <AdminCenter />}
+         {activeTab === "adminCredit" && <AdminCreditStats />}
+         {activeTab === "adminSeatConfig" && <AdminSeatConfig />}
+         {activeTab === "simulateMonitor" && <AdminSimulateMonitor />}
       </main>
 
       {role !== "admin" && floatingNotice && (

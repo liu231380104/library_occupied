@@ -2,9 +2,9 @@ const mysql = require("mysql2/promise");
 require("dotenv").config();
 
 const DB_HOST = process.env.DB_HOST || "localhost";
-const DB_PORT = parseInt(process.env.DB_PORT, 10) || 3007;
+const DB_PORT = parseInt(process.env.DB_PORT, 10) || 3306;
 const DB_USER = process.env.DB_USER || "root";
-const DB_PASSWORD = process.env.DB_PASSWORD || "root";
+const DB_PASSWORD = process.env.DB_PASSWORD || "MyCxy5201004-";
 const DB_NAME = process.env.DB_NAME || "library_seat_system";
 
 // Use a pool to avoid "connection closed" errors and to allow concurrent queries

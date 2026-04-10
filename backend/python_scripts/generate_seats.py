@@ -102,7 +102,8 @@ def filter_outlier_boxes(seats):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--video", required=True, help="视频路径")
+    p.add_argument("--video", default="", help="视频路径")
+    p.add_argument("--image", default="", help="图片路径")
     p.add_argument("--frame", type=int, default=0, help="用于识别的帧索引")
     p.add_argument("--model", default="", help="检测模型路径")
     p.add_argument("--conf", type=float, default=0.2, help="检测置信度")
@@ -111,26 +112,48 @@ def main():
     p.add_argument("--out-image", default="results/annotated_seats.jpg", help="识别预览图输出路径")
     args = p.parse_args()
 
-    if not os.path.exists(args.video):
-        print(json.dumps({"error": f"视频不存在: {args.video}"}))
+    image_path = str(args.image or "").strip()
+    video_path = str(args.video or "").strip()
+
+    if not image_path and not video_path:
+        print(json.dumps({"error": "请提供 --image 或 --video"}))
         return
 
-    cap = cv2.VideoCapture(args.video)
-    if not cap.isOpened():
-        print(json.dumps({"error": "无法打开视频"}))
-        return
+    frame = None
+    fps_meta = 0.0
+    frame_count = 1
+    source = "image"
 
-    fps_meta = float(cap.get(cv2.CAP_PROP_FPS) or 0)
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    if image_path:
+        if not os.path.exists(image_path):
+            print(json.dumps({"error": f"图片不存在: {image_path}"}))
+            return
+        frame = cv2.imread(image_path)
+        if frame is None:
+            print(json.dumps({"error": "无法读取图片"}))
+            return
+    else:
+        if not os.path.exists(video_path):
+            print(json.dumps({"error": f"视频不存在: {video_path}"}))
+            return
 
-    if args.frame > 0:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, args.frame)
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(json.dumps({"error": "无法打开视频"}))
+            return
 
-    ret, frame = cap.read()
-    cap.release()
-    if not ret:
-        print(json.dumps({"error": "无法读取指定帧"}))
-        return
+        fps_meta = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+
+        if args.frame > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, args.frame)
+
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            print(json.dumps({"error": "无法读取指定帧"}))
+            return
+        source = "video"
 
     model_candidates = [
         args.model.strip() if args.model else "",
@@ -216,6 +239,7 @@ def main():
                 "annotatedImage": args.out_image.replace("\\", "/"),
                 "model": model_path,
                 "sourceVideo": {
+                    "source": source,
                     "fps": fps_meta,
                     "frameCount": frame_count,
                     "width": img_w,
