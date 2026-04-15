@@ -218,11 +218,14 @@ class ImageSimulator:
         for index in range(len(self.seats)):
             latest_state = self.latest_state_by_index[index] or {}
             occupied = index in self.current_occupied
+            has_person = bool(latest_state.get("hasPerson"))
+            has_item = bool(latest_state.get("hasItem"))
 
             seat_states.append({
                 "index": index,
-                "hasPerson": bool(latest_state.get("hasPerson")) if occupied else False,
-                "hasItem": bool(latest_state.get("hasItem")) if occupied else False,
+                "hasPerson": has_person,
+                "hasItem": has_item,
+                "detectedOccupied": bool(has_person or has_item),
                 "occupied": bool(occupied),
             })
 

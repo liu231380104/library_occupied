@@ -746,8 +746,10 @@ const AdminSimulateMonitor = () => {
           const timestamp = new Date().toLocaleTimeString();
           const processedFrames = resp.data.lastDetection.processedFrames || 0;
           const occupiedCount = resp.data.lastDetection.occupiedCount || 0;
+          const abnormalCount = resp.data.lastDetection.abnormalCount || 0;
+          const timingCount = resp.data.lastDetection.timingCount || 0;
           const violationCount = resp.data.lastDetection.violationCount || 0;
-          const logLine = `[${timestamp}] Frame ${String(processedFrames).padStart(4, "0")} - Occupied: ${occupiedCount}, Violations: ${violationCount}`;
+          const logLine = `[${timestamp}] Frame ${String(processedFrames).padStart(4, "0")} - Occupied: ${occupiedCount}, Abnormal: ${abnormalCount}, Timing: ${timingCount}, Violations: ${violationCount}`;
           
           // 检查是否是新的日志（避免重复添加）
           setStatusHistory((prev) => {
@@ -835,7 +837,9 @@ const AdminSimulateMonitor = () => {
    */
   const calculateViolationDuration = (violationStartTime) => {
     if (!violationStartTime) return 0;
-    const startMs = typeof violationStartTime === "number" ? violationStartTime * 1000 : new Date(violationStartTime).getTime();
+    const startMs = typeof violationStartTime === "number"
+      ? (violationStartTime > 1e12 ? violationStartTime : violationStartTime * 1000)
+      : new Date(violationStartTime).getTime();
     return Math.max(0, Math.floor((nowTs - startMs) / 1000));
   };
 
@@ -851,6 +855,62 @@ const AdminSimulateMonitor = () => {
     return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
   };
 
+  const formatDateTime = (value) => {
+    if (!value) return "-";
+    const ts = typeof value === "number"
+      ? (value > 1e12 ? value : value * 1000)
+      : new Date(value).getTime();
+    if (!Number.isFinite(ts) || ts <= 0) return "-";
+    return new Date(ts).toLocaleTimeString();
+  };
+
+  const seatAssessment = Array.isArray(simulateData?.seatAssessment) ? simulateData.seatAssessment : [];
+  const abnormalSeats = seatAssessment.length > 0
+    ? seatAssessment.filter((seat) => seat?.isAbnormal)
+    : (Array.isArray(simulateData?.abnormalSeatIndices)
+      ? simulateData.abnormalSeatIndices.map((seatIndex) => ({
+          seatIndex,
+          seatNumber: `座位 ${Number(seatIndex) + 1}`,
+        }))
+      : []);
+  const timingSeats = seatAssessment
+    .filter((seat) => seat?.withTimer && Number.isFinite(Number(seat?.leaveTimerStartTime)))
+    .map((seat) => ({
+      seatIndex: Number(seat.seatIndex),
+      seatNumber: seat.seatNumber ? `座位 ${seat.seatNumber}` : `座位 ${Number(seat.seatIndex) + 1}`,
+      startTime: Number(seat.leaveTimerStartTime),
+      duration: calculateViolationDuration(Number(seat.leaveTimerStartTime)),
+    }))
+    .sort((a, b) => b.duration - a.duration);
+  const timerRecords = Array.isArray(simulateData?.leaveTimerRecords)
+    ? simulateData.leaveTimerRecords.map((record, idx) => {
+        const startTime = Number(record?.startTime || 0);
+        const endTime = record?.endTime ? Number(record.endTime) : null;
+        const duration = Number.isFinite(Number(record?.durationSeconds))
+          ? Number(record.durationSeconds)
+          : (endTime ? Math.max(0, Math.floor((endTime - startTime) / 1000)) : calculateViolationDuration(startTime));
+        return {
+          key: `${record?.seatId || 'seat'}-${startTime}-${idx}`,
+          seatNumber: record?.seatNumber ? `座位 ${record.seatNumber}` : `座位 ${Number(record?.seatIndex) + 1}`,
+          area: record?.area || "",
+          state: record?.state || "active",
+          isViolation: Boolean(record?.isViolation),
+          startTime,
+          endTime,
+          duration,
+        };
+      })
+    : timingSeats.map((seat) => ({
+        key: `fallback-${seat.seatIndex}`,
+        seatNumber: seat.seatNumber,
+        area: "",
+        state: "active",
+        isViolation: false,
+        startTime: seat.startTime,
+        endTime: null,
+        duration: seat.duration,
+      }));
+
   // 获取违规座位列表
   const violationSeats = simulateData?.violationTimes
     ? Object.entries(simulateData.violationTimes)
@@ -865,6 +925,7 @@ const AdminSimulateMonitor = () => {
 
   const totalSeats = simulateData?.seatStates?.length || 0;
   const occupiedCount = simulateData?.occupiedIndices?.length || 0;
+  const abnormalCount = abnormalSeats.length;
   const violationCount = violationSeats.length;
 
   return (
@@ -1210,11 +1271,56 @@ const AdminSimulateMonitor = () => {
               </div>
               <div style={METRIC_CARD_STYLE}>
                 <div style={{ ...METRIC_VALUE_STYLE, color: THEME.danger }}>
-                  {violationCount}
+                  {abnormalCount}
                 </div>
                 <div style={METRIC_LABEL_STYLE}>异常占座</div>
               </div>
             </div>
+          </div>
+
+          {/* 违规滚动列表 */}
+          <div style={{ ...HERO_STYLE, marginTop: "16px" }}>
+            <h2 style={SECTION_TITLE_STYLE}>⏱ 离座计时记录</h2>
+            {timerRecords.length > 0 ? (
+              <div style={VIOLATION_LIST_STYLE}>
+                {timerRecords.map((timerSeat, idx) => (
+                  <div
+                    key={timerSeat.key}
+                    style={{
+                      ...VIOLATION_ITEM_STYLE,
+                      padding: "12px",
+                      borderBottom:
+                        idx < timerRecords.length - 1 ? `1px solid ${THEME.soft}` : "none",
+                    }}
+                  >
+                    <span style={VIOLATION_SEAT_STYLE}>
+                      {timerSeat.seatNumber}
+                      {timerSeat.area ? ` (${timerSeat.area})` : ""}
+                    </span>
+                    <span style={VIOLATION_DURATION_STYLE}>
+                      {formatDuration(timerSeat.duration)}
+                    </span>
+                    <span style={{ fontSize: "12px", color: THEME.muted }}>
+                      {formatDateTime(timerSeat.startTime)} - {timerSeat.endTime ? formatDateTime(timerSeat.endTime) : "进行中"}
+                    </span>
+                    <span style={{ fontSize: "12px", color: timerSeat.isViolation ? THEME.danger : THEME.success }}>
+                      {timerSeat.isViolation ? "已违规" : (timerSeat.state === "active" ? "计时中" : "已结束")}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div
+                style={{
+                  padding: "20px",
+                  textAlign: "center",
+                  color: THEME.muted,
+                  fontSize: "13px",
+                }}
+              >
+                当前无离座计时中的座位
+              </div>
+            )}
           </div>
 
           {/* 违规滚动列表 */}
