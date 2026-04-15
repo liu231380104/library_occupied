@@ -921,7 +921,18 @@ const AdminSimulateMonitor = () => {
           duration: calculateViolationDuration(violation.startTime),
         }))
         .sort((a, b) => b.duration - a.duration) // 按时长降序
-    : [];
+    : seatAssessment
+        .filter((seat) => seat?.isViolation)
+        .map((seat) => {
+          const fallbackStartTime = Number(seat?.violationStartTime || seat?.leaveTimerStartTime || Date.now());
+          return {
+            seatIndex: Number(seat?.seatIndex),
+            seatNumber: seat?.seatNumber ? `座位 ${seat.seatNumber}` : `座位 ${Number(seat?.seatIndex) + 1}`,
+            startTime: fallbackStartTime,
+            duration: calculateViolationDuration(fallbackStartTime),
+          };
+        })
+        .sort((a, b) => b.duration - a.duration);
 
   const totalSeats = simulateData?.seatStates?.length || 0;
   const occupiedCount = simulateData?.occupiedIndices?.length || 0;

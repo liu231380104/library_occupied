@@ -397,8 +397,14 @@ const applySimulationToDatabase = async (result) => {
       confirmedPresenceBySeatId.delete(seatId);
     }
     const hasConfirmedPresence = Boolean(confirmedPresenceBySeatId.get(seatId));
+    const hasHistoricalLeaveTimer = Boolean(seatSnapshot.itemOccupiedSince);
+    const wasOccupiedActiveSeat = isActive && Number(seatSnapshot.status) === 2;
+    // 兜底：active 预约视为可计时状态，避免内存态或历史字段偶发缺失导致计时链路中断。
+    const hasPresenceSignal = Boolean(
+      hasConfirmedPresence || hasHistoricalLeaveTimer || wasOccupiedActiveSeat || isActive,
+    );
 
-    if (isActive && hasConfirmedPresence && !hasPerson && !hasItem) {
+    if (isActive && hasPresenceSignal && !hasPerson && !hasItem) {
       noPersonNoItemStreakBySeatId.set(
         seatId,
         (Number(noPersonNoItemStreakBySeatId.get(seatId)) || 0) + 1,
@@ -409,10 +415,10 @@ const applySimulationToDatabase = async (result) => {
 
     const noPersonNoItemStreak = Number(noPersonNoItemStreakBySeatId.get(seatId)) || 0;
     const withTimerByNoItem = Boolean(
-      isActive && hasConfirmedPresence && !hasPerson && !hasItem
+      isActive && hasPresenceSignal && !hasPerson && !hasItem
       && noPersonNoItemStreak >= LEAVE_EMPTY_FRAME_THRESHOLD,
     );
-    const withTimerByDetectedItem = Boolean(isActive && hasConfirmedPresence && hasItem && !hasPerson);
+    const withTimerByDetectedItem = Boolean(isActive && hasPresenceSignal && hasItem && !hasPerson);
 
     // 规则：
     // - 预约 + 有人：待确认/已签到取决于预约状态
@@ -431,7 +437,7 @@ const applySimulationToDatabase = async (result) => {
     let violationStartTime = null;
     let isViolationSeat = false;
 
-    if (isActive && hasConfirmedPresence && !hasPerson && effectiveWithTimer) {
+    if (isActive && hasPresenceSignal && !hasPerson && effectiveWithTimer) {
       const [seatRows] = await conn.query(
         'SELECT item_occupied_since FROM seats WHERE seat_id = ? LIMIT 1',
         [seatId],
@@ -485,6 +491,11 @@ const applySimulationToDatabase = async (result) => {
     }
 
     const isAbnormalSeat = next.status === 3;
+    // 需求变更：异常占座即视为违规座位。
+    if (isAbnormalSeat && !isViolationSeat) {
+      isViolationSeat = true;
+      violationStartTime = violationStartTime || leaveTimerStartTime || Date.now();
+    }
 
     if (!effectiveWithTimer && !hasPerson && isAbnormalSeat) {
       console.log(
