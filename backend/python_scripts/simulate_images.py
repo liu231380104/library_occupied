@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import re
 import cv2
 import argparse
 import glob
@@ -12,6 +13,7 @@ from stream_video import detect_seat_states
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BACKEND_DIR = os.path.dirname(SCRIPT_DIR)
 MODEL_DIR = os.path.join(BACKEND_DIR, "modules")
+LEAVE_ITEM_TIMEOUT_MINUTES = float(os.environ.get('LEAVE_ITEM_TIMEOUT_MINUTES', '15'))
 DEFAULT_PERSON_MODEL = os.environ.get("PERSON_DETECT_MODEL", os.path.join(MODEL_DIR, "best.pt"))
 DEFAULT_ITEM_MODEL = os.environ.get("ITEM_DETECT_MODEL", os.path.join(MODEL_DIR, "yolov8n.pt"))
 
@@ -49,7 +51,7 @@ class ImageSimulator:
         self.occupy_thr = max(1, occupy_thr)
         self.detect_interval = max(1, detect_interval)
         self.debug_output_dir = (debug_output_dir or "").strip()
-        self.debug_output_interval = max(1.0, float(debug_output_interval or 10.0))
+        self.debug_output_interval = max(0.0, float(debug_output_interval or 0.0))
         self.last_debug_output_at = 0.0
 
         # 加载图片列表（按名称排序）
@@ -78,31 +80,65 @@ class ImageSimulator:
         self.total_detections = 0
         self.total_frames_processed = 0
         self.current_occupied = set()
+        self.current_frame_id = -1
+        self.current_image_path = ""
+        self.latest_debug_image_name = "simulate_latest.jpg"
 
-    def _write_debug_preview_if_needed(self, frame):
+    def _write_debug_preview_if_needed(self, frame, frame_id=-1):
         if not self.debug_output_dir:
             return
         now = time.time()
-        if now - self.last_debug_output_at < self.debug_output_interval:
+        if self.debug_output_interval > 0 and now - self.last_debug_output_at < self.debug_output_interval:
             return
 
         os.makedirs(self.debug_output_dir, exist_ok=True)
         canvas = frame.copy()
         for i, seat in enumerate(self.seats):
             x1, y1, x2, y2 = map(int, seat)
-            color = (0, 255, 0) if i in self.current_occupied else (0, 0, 255)
+            violation_start = self.violation_start_time[i]
+            is_timing = violation_start is not None
+            duration_seconds = 0.0
+            if is_timing:
+                duration_seconds = max(0.0, time.time() - float(violation_start))
+
+            is_violation = is_timing and duration_seconds >= max(1.0, float(LEAVE_ITEM_TIMEOUT_MINUTES)) * 60.0
+            if is_violation:
+                color = (0, 0, 255)
+                label = f"Seat {i + 1} VIOL {duration_seconds:.0f}s"
+            elif is_timing:
+                color = (0, 165, 255)
+                label = f"Seat {i + 1} TIMER {duration_seconds:.0f}s"
+            elif i in self.current_occupied:
+                color = (0, 255, 0)
+                label = f"Seat {i + 1} OCC"
+            else:
+                color = (0, 0, 255)
+                label = f"Seat {i + 1} EMPTY"
+
             cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 3)
-            label = f"Seat {i + 1} {'OCC' if i in self.current_occupied else 'EMPTY'}"
             cv2.putText(canvas, label, (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
-        target_path = os.path.join(self.debug_output_dir, "simulate_latest.jpg")
-        tmp_path = os.path.join(self.debug_output_dir, "simulate_latest.tmp.jpg")
+        frame_num = int(frame_id) if isinstance(frame_id, int) and frame_id >= 0 else -1
+        frame_name = f"simulate_frame_{frame_num:06d}.jpg" if frame_num >= 0 else "simulate_latest.jpg"
+        target_path = os.path.join(self.debug_output_dir, frame_name)
+        tmp_path = os.path.join(self.debug_output_dir, f"{frame_name}.tmp.jpg")
         ok = cv2.imwrite(tmp_path, canvas)
         if ok:
             try:
                 os.replace(tmp_path, target_path)
             except Exception:
                 cv2.imwrite(target_path, canvas)
+
+            # 兼容旧预览路径
+            latest_path = os.path.join(self.debug_output_dir, "simulate_latest.jpg")
+            latest_tmp = os.path.join(self.debug_output_dir, "simulate_latest.tmp.jpg")
+            cv2.imwrite(latest_tmp, canvas)
+            try:
+                os.replace(latest_tmp, latest_path)
+            except Exception:
+                cv2.imwrite(latest_path, canvas)
+
+            self.latest_debug_image_name = frame_name
         self.last_debug_output_at = now
 
     def get_current_real_time(self):
@@ -130,6 +166,13 @@ class ImageSimulator:
             return None
 
         # 更新索引，实现循环
+        self.current_image_path = image_path
+        m = re.search(r"frame_(\d+)", os.path.basename(image_path), flags=re.IGNORECASE)
+        if m:
+            self.current_frame_id = int(m.group(1))
+        else:
+            self.current_frame_id = max(0, self.total_frames_processed)
+
         self.current_index = (self.current_index + 1) % self.total_images
         self.total_frames_processed += 1
 
@@ -202,7 +245,7 @@ class ImageSimulator:
                 self.violation_start_time[seat_index] = None
 
         self.current_occupied = {idx for idx, flag in enumerate(self.stable_occupied) if flag}
-        self._write_debug_preview_if_needed(frame)
+        self._write_debug_preview_if_needed(frame, self.current_frame_id)
 
         return self._build_result()
 
@@ -243,6 +286,9 @@ class ImageSimulator:
             "occupied": [i + 1 for i in occupied_indices],  # 1-based，兼容旧接口
             "seatStates": seat_states,
             "status": {
+                "frameId": int(self.current_frame_id) if self.current_frame_id >= 0 else None,
+                "sourceImage": self.current_image_path,
+                "debugImageName": self.latest_debug_image_name,
                 "processedFrames": self.total_frames_processed,
                 "totalDetections": self.total_detections,
                 "currentImageIndex": self.current_index,
@@ -313,7 +359,7 @@ def main():
     parser.add_argument('--debug-output-dir',
                        default=os.path.join(SCRIPT_DIR, 'debug_output'),
                        help='实时预览图输出目录')
-    parser.add_argument('--debug-output-interval', type=float, default=10.0,
+    parser.add_argument('--debug-output-interval', type=float, default=0.0,
                        help='实时预览图输出间隔（秒）')
 
     args = parser.parse_args()

@@ -254,6 +254,8 @@ const AdminSimulateMonitor = () => {
   const [editorAction, setEditorAction] = useState(null);
   const editorImgRef = useRef(null);
   const statusFetchingRef = useRef(false);
+  const latestSyncedSeqRef = useRef(-1);
+  const previewSyncTokenRef = useRef(0);
 
   // 轮询控制
   const pollIntervalRef = useRef(null);
@@ -721,6 +723,67 @@ const AdminSimulateMonitor = () => {
     }
   };
 
+  const syncStatusWithPreview = (statusData) => {
+    if (!statusData || typeof statusData !== "object") return;
+
+    const frameIdRaw = Number(
+      statusData?.debugImageFrameId ?? statusData?.status?.frameId,
+    );
+    const syncSeqRaw = Number(statusData?.status?.processedFrames);
+    const hasSyncSeq = Number.isFinite(syncSeqRaw) && syncSeqRaw >= 0;
+    const syncSeq = hasSyncSeq ? Math.floor(syncSeqRaw) : -1;
+    const hasFrameId = Number.isFinite(frameIdRaw) && frameIdRaw >= 0;
+    const frameId = hasFrameId ? Math.floor(frameIdRaw) : -1;
+
+    setIsRunning(Boolean(statusData?.isRunning));
+
+    const rawDebugUrl = statusData?.debugImageUrl;
+    if (!rawDebugUrl) {
+      setSimulateData(statusData);
+      setLastUpdateTime(new Date());
+      return;
+    }
+
+    const resolved = toBackendAssetUrl(rawDebugUrl);
+    const sep = resolved.includes("?") ? "&" : "?";
+    const syncParam = hasSyncSeq
+      ? `syncSeq=${syncSeq}`
+      : (hasFrameId ? `frameId=${frameId}` : `t=${Date.now()}`);
+    const previewUrl = `${resolved}${sep}${syncParam}`;
+
+    if (!hasSyncSeq) {
+      setLivePreviewUrl(previewUrl);
+      setSimulateData(statusData);
+      setLastUpdateTime(new Date());
+      return;
+    }
+
+    const token = previewSyncTokenRef.current + 1;
+    previewSyncTokenRef.current = token;
+    const img = new window.Image();
+
+    img.onload = () => {
+      if (token !== previewSyncTokenRef.current) return;
+      if (syncSeq < latestSyncedSeqRef.current) return;
+      latestSyncedSeqRef.current = syncSeq;
+      setLivePreviewUrl(previewUrl);
+      setSimulateData(statusData);
+      setLastUpdateTime(new Date());
+    };
+
+    img.onerror = () => {
+      if (token !== previewSyncTokenRef.current) return;
+      if (syncSeq < latestSyncedSeqRef.current) return;
+      // 图片偶发加载失败时仍推进状态，避免界面卡住。
+      latestSyncedSeqRef.current = syncSeq;
+      setLivePreviewUrl(previewUrl);
+      setSimulateData(statusData);
+      setLastUpdateTime(new Date());
+    };
+
+    img.src = previewUrl;
+  };
+
   /**
    * 获取模拟器状态
    */
@@ -730,16 +793,7 @@ const AdminSimulateMonitor = () => {
       statusFetchingRef.current = true;
       const resp = await api.get("/simulate/status");
       if (resp.data) {
-        setSimulateData(resp.data);
-        setLastUpdateTime(new Date());
-        setIsRunning(Boolean(resp.data?.isRunning));
-
-        // 更新预览图片（每次都刷新，避免缓存）
-        if (resp.data.debugImageUrl) {
-          const resolved = toBackendAssetUrl(resp.data.debugImageUrl);
-          const sep = resolved.includes("?") ? "&" : "?";
-          setLivePreviewUrl(`${resolved}${sep}t=${Date.now()}`);
-        }
+        syncStatusWithPreview(resp.data);
 
         // 添加日志条目
         if (resp.data.lastDetection) {
@@ -781,13 +835,7 @@ const AdminSimulateMonitor = () => {
         setIsRunning(running);
 
         if (resp.data) {
-          setSimulateData(resp.data);
-          setLastUpdateTime(new Date());
-          if (resp.data.debugImageUrl) {
-            const resolved = toBackendAssetUrl(resp.data.debugImageUrl);
-            const sep = resolved.includes("?") ? "&" : "?";
-            setLivePreviewUrl(`${resolved}${sep}t=${Date.now()}`);
-          }
+          syncStatusWithPreview(resp.data);
         }
 
         if (running) {
