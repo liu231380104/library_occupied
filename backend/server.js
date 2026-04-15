@@ -51,10 +51,12 @@ const authRoutes = require("./routes/auth");
 const seatsRoutes = require("./routes/seats");
 const reserveRoutes = require("./routes/reserve");
 const reportRoutes = require("./routes/reports");
+const simulateRoutes = require("./routes/simulate");
 app.use("/api/auth", authRoutes);
 app.use("/api/seats", seatsRoutes);
 app.use("/api/reservations", reserveRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/simulate", simulateRoutes);
 
 const PY_SCRIPT_DIR = path.join(__dirname, "python_scripts");
 const SEAT_META_PATH = path.join(PY_SCRIPT_DIR, "seats_meta.json");
