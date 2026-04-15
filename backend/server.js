@@ -51,12 +51,10 @@ const authRoutes = require("./routes/auth");
 const seatsRoutes = require("./routes/seats");
 const reserveRoutes = require("./routes/reserve");
 const reportRoutes = require("./routes/reports");
-const simulateRoutes = require("./routes/simulate");
 app.use("/api/auth", authRoutes);
 app.use("/api/seats", seatsRoutes);
 app.use("/api/reservations", reserveRoutes);
 app.use("/api/reports", reportRoutes);
-app.use("/api/simulate", simulateRoutes);
 
 const PY_SCRIPT_DIR = path.join(__dirname, "python_scripts");
 const SEAT_META_PATH = path.join(PY_SCRIPT_DIR, "seats_meta.json");
@@ -139,37 +137,6 @@ app.post("/api/upload-video", uploadVideo.single("video"), (req, res) => {
     mimeType: req.file.mimetype,
   });
 });
-
-// 上传用于模拟/标定的图片（保存到 python_scripts/simulated_samples）
-const sampleImageStorage = multer.diskStorage({
-  destination: (_, __, cb) => {
-    const sampleDir = path.join(__dirname, "..", "python_scripts", "simulated_samples");
-    fs.mkdirSync(sampleDir, { recursive: true });
-    cb(null, sampleDir);
-  },
-  filename: (_, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase() || ".jpg";
-    const baseName = path
-      .basename(file.originalname || "image", ext)
-      .replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]+/g, "_")
-      .slice(0, 60) || "sample";
-    cb(null, `${Date.now()}-${Math.floor(Math.random() * 100000)}-${baseName}${ext}`);
-  },
-});
-
-const uploadSampleImage = multer({
-  storage: sampleImageStorage,
-  limits: { fileSize: Number(process.env.MAX_UPLOAD_IMAGE_SIZE || 20 * 1024 * 1024) },
-  fileFilter: (_, file, cb) => {
-    const allowed = typeof file.mimetype === "string" && file.mimetype.startsWith("image/");
-    const ext = path.extname(file.originalname || "").toLowerCase();
-    const allowedExt = new Set([".jpg", ".jpeg", ".png", ".webp"]);
-    if (allowed || allowedExt.has(ext)) return cb(null, true);
-    return cb(new Error("只允许上传图片文件"));
-  },
-});
-
-// /api/upload-sample-image endpoint removed
 
 app.use((err, req, res, next) => {
   if (req.path === "/api/upload-video") {
@@ -1081,12 +1048,7 @@ async function runSeatDetection({
       const hasPerson = Boolean(state?.hasPerson);
       const hasItem = Boolean(state?.hasItem);
 
-      if (hasItem && !hasPerson) {
-        await conn.query(
-          "UPDATE seats SET item_occupied_since = COALESCE(item_occupied_since, NOW()) WHERE seat_id = ?",
-          [seatId],
-        );
-      } else {
+      if (!(hasItem && !hasPerson)) {
         await conn.query(
           "UPDATE seats SET item_occupied_since = NULL WHERE seat_id = ?",
           [seatId],
@@ -1259,6 +1221,7 @@ async function runSeatDetection({
 
       if (pendingReservations.length > 0) {
         // 有待签到预约时先保持“已预约”，并发起“是否本人入座”确认
+        await conn.query("UPDATE seats SET item_occupied_since = NULL WHERE seat_id = ?", [seatId]);
         await conn.query("UPDATE seats SET status = 1 WHERE seat_id = ?", [seatId]);
 
         if (presencePromptFeatureAvailable && hasPerson) {
@@ -1320,6 +1283,7 @@ async function runSeatDetection({
       }
 
       // 座位被占用且无活跃/待签到预约 -> 异常占座
+      await conn.query("UPDATE seats SET item_occupied_since = NULL WHERE seat_id = ?", [seatId]);
       await conn.query("UPDATE seats SET status = 3 WHERE seat_id = ?", [seatId]);
     }
 
@@ -1480,8 +1444,6 @@ async function runSeatDetection({
     detectionStartedAt = 0;
   }
 }
-
-// /api/simulated/* endpoints removed
 
 // 启动服务器
 (async () => {
