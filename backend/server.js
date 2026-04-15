@@ -52,6 +52,7 @@ const seatsRoutes = require("./routes/seats");
 const reserveRoutes = require("./routes/reserve");
 const reportRoutes = require("./routes/reports");
 const simulateRoutes = require("./routes/simulate");
+
 app.use("/api/auth", authRoutes);
 app.use("/api/seats", seatsRoutes);
 app.use("/api/reservations", reserveRoutes);
