@@ -11,6 +11,8 @@ BACKEND_DIR = os.path.dirname(SCRIPT_DIR)
 MODEL_DIR = os.path.join(BACKEND_DIR, "modules")
 DEFAULT_PERSON_MODEL = os.environ.get("PERSON_DETECT_MODEL", os.path.join(MODEL_DIR, "best.pt"))
 DEFAULT_ITEM_MODEL = os.environ.get("ITEM_DETECT_MODEL", os.path.join(MODEL_DIR, "yolov8n.pt"))
+BOOK_CLASS_ID = 73
+BOOK_ITEM_MIN_CONF = max(0.0, min(1.0, float(os.environ.get("BOOK_ITEM_MIN_CONF", "0.3"))))
 
 
 def detect_seat_states(frame, seats, person_model, item_model, target_item_ids, imgsz, conf):
@@ -33,6 +35,8 @@ def detect_seat_states(frame, seats, person_model, item_model, target_item_ids, 
         if cls_id == PERSON_ID:
             yolo_persons.append([x1, y1, x2, y2, confv])
         elif cls_id in target_item_ids:
+            if cls_id == BOOK_CLASS_ID and confv < BOOK_ITEM_MIN_CONF:
+                continue
             items.append([x1, y1, x2, y2, cls_id, confv])
 
     persons = merge_person_detections(best_persons, yolo_persons, iou_threshold=0.2)
@@ -79,7 +83,7 @@ def main():
     p.add_argument('--use-raw-seats', action='store_true', help='直接使用 seats.json 的原始坐标（不按视频缩放）')
     p.add_argument('--out', default='', help='输出视频路径，留空则只检测不生成视频')
     p.add_argument('--show', action='store_true', help='显示实时窗口')
-    p.add_argument('--conf', type=float, default=0.4)
+    p.add_argument('--conf', type=float, default=0.01)
     p.add_argument('--occupy-thr', type=int, default=3, help='判定为占座所需连续帧数')
     p.add_argument('--max-frames', type=int, default=0, help='处理的最大帧数（0 表示全部）')
     p.add_argument('--start-frame', type=int, default=0, help='起始帧索引（用于分段检测）')
@@ -103,8 +107,8 @@ def main():
         print(json.dumps({"error": f"加载模型失败: {e}"}))
         return
 
-    # 定义要识别的目标物品类别ID
-    TARGET_ITEM_IDS = [24, 26, 28, 73, 74, 76]  # 背包, 雨伞, 手提包, 书, 笔记本电脑, 手机
+    # 定义要识别的目标物品类别ID（COCO）
+    TARGET_ITEM_IDS = [24, 25, 26, 63, 67, 73]  # 背包, 雨伞, 手提包, 笔记本电脑, 手机, 书
 
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():

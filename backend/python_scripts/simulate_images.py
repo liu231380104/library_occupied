@@ -294,7 +294,7 @@ def main():
                        help='包含图片的文件夹路径')
     parser.add_argument('--seats', default='seats.json',
                        help='座位 json 文件路径')
-    parser.add_argument('--conf', type=float, default=0.4,
+    parser.add_argument('--conf', type=float, default=0.01,
                        help='检测置信度阈值')
     parser.add_argument('--occupy-thr', type=int, default=3,
                        help='判定为占座所需连续采样次数')
@@ -339,8 +339,8 @@ def main():
         print(json.dumps({"error": f"加载模型失败: {e}"}))
         return
 
-    # 定义目标物品类别ID
-    TARGET_ITEM_IDS = [24, 26, 28, 73, 74, 76]  # 背包, 雨伞, 手提包, 书, 笔记本电脑, 手机
+    # 定义目标物品类别ID（COCO）
+    TARGET_ITEM_IDS = [24, 25, 26, 63, 67, 73]  # 背包, 雨伞, 手提包, 笔记本电脑, 手机, 书
 
     # 创建模拟器
     try:
