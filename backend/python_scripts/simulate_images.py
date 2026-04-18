@@ -307,6 +307,9 @@ class ImageSimulator:
                 if has_item and not has_person:
                     if self.violation_start_time[seat_index] is None:
                         self.violation_start_time[seat_index] = current_time
+                else:
+                    # 人已回来（或不再满足“有物无人”）时，结束离座计时。
+                    self.violation_start_time[seat_index] = None
             elif not is_now_occupied and was_occupied:
                 # 座位从占座变为空闲：清除计时
                 self.violation_start_time[seat_index] = None
