@@ -12,7 +12,7 @@ const toBackendAssetUrl = (rawUrl) => {
   return `${API_ORIGIN}${cleaned}`;
 };
 
-// 与 AdminSeatConfig.js 保持一致的 THEME
+// 监控页统一主题色配置
 const THEME = {
   panel: "#fcfbf8",
   soft: "#f1eee8",
@@ -334,8 +334,8 @@ const AdminSimulateMonitor = () => {
         return;
       }
 
-      // 2) 再同步到座位地图/数据库（复用现有后端逻辑）
-      const syncResp = await api.post("/confirm-seats", {
+      // 2) 再同步到座位地图/数据库
+      const syncResp = await api.post("/simulate/sync-seats", {
         area: String(syncArea || "A区").trim() || "A区",
         prefix: String(syncPrefix || "A").trim() || "A",
         seats: parsed,

@@ -6,7 +6,6 @@ import MyNotifications from "../notifications/MyNotifications";
 import MyCreditStats from "../credit/MyCreditStats";
 import AdminCenter from "../admin/AdminCenter";
 import AdminCreditStats from "../admin/AdminCreditStats";
-import AdminSeatConfig from "../admin/AdminSeatConfig";
 import AdminSimulateMonitor from "../admin/AdminSimulateMonitor";
 import api from "../../services/api";
 import { getCurrentUser, getUserRole } from "../../utils/tokenUtils";
@@ -25,6 +24,8 @@ const THEME = {
   text: "#3f4748",
   muted: "#646d6e",
 };
+
+const FLOATING_NOTICE_SYNC_INTERVAL_MS = 3000;
 
 function getNoticeTtlMs(item) {
   const source = String(item?.source || "");
@@ -58,7 +59,6 @@ const Dashboard = () => {
   const [creditScore, setCreditScore] = useState(null);
   const [accountStatus, setAccountStatus] = useState("active");
   const [activeTab, setActiveTab] = useState("seatMap");
-  const [keepAdminSeatConfigMounted, setKeepAdminSeatConfigMounted] = useState(false);
   const [floatingNotice, setFloatingNotice] = useState(null);
   const [dismissedNoticeIds, setDismissedNoticeIds] = useState(() => {
     try {
@@ -113,12 +113,6 @@ const Dashboard = () => {
   }, [role]);
 
   useEffect(() => {
-    if (role === "admin" && activeTab === "adminSeatConfig") {
-      setKeepAdminSeatConfigMounted(true);
-    }
-  }, [role, activeTab]);
-
-  useEffect(() => {
     if (role === "admin" || !role) {
       setFloatingNotice(null);
       return;
@@ -145,9 +139,43 @@ const Dashboard = () => {
       }
     };
 
+    let refreshTimer = null;
+    const scheduleRefresh = (delayMs = 0) => {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      refreshTimer = setTimeout(() => {
+        fetchTopNotification();
+      }, Math.max(0, Number(delayMs) || 0));
+    };
+
     fetchTopNotification();
-    const timer = setInterval(fetchTopNotification, 30000);
-    return () => clearInterval(timer);
+    const timer = setInterval(fetchTopNotification, FLOATING_NOTICE_SYNC_INTERVAL_MS);
+
+    let source;
+    if (typeof EventSource !== "undefined") {
+      source = new EventSource("/api/seats/stream");
+      const handleSeatUpdate = (event) => {
+        try {
+          // 任何座位事件都可能驱动消息变化，做一次防抖刷新。
+          JSON.parse(event.data || "{}");
+          scheduleRefresh(120);
+        } catch (e) {
+          // ignore malformed events
+        }
+      };
+      source.addEventListener("seat-update", handleSeatUpdate);
+    }
+
+    return () => {
+      clearInterval(timer);
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      if (source) {
+        source.close();
+      }
+    };
   }, [role, dismissedNoticeIds, activeTab]);
 
   const markNoticeRead = async (notice) => {
@@ -331,45 +359,25 @@ const Dashboard = () => {
             </li>
           )}
            {role === "admin" && (
-             <>
-               <li>
-                 <button
-                   onClick={() => setActiveTab("adminSeatConfig")}
-                   style={{
-                     width: "100%",
-                     marginBottom: "8px",
-                     padding: "8px",
-                     backgroundColor:
-                       activeTab === "adminSeatConfig" ? THEME.primary : "#fff",
-                     color: activeTab === "adminSeatConfig" ? THEME.primaryText : THEME.btnText,
-                     border: `1px solid ${THEME.border}`,
-                     borderRadius: "4px",
-                     cursor: "pointer",
-                   }}
-                 >
-                   视频座位配置
-                 </button>
-               </li>
-               <li>
-                 <button
-                   onClick={() => setActiveTab("simulateMonitor")}
-                   style={{
-                     width: "100%",
-                     marginBottom: "8px",
-                     padding: "8px",
-                     backgroundColor:
-                       activeTab === "simulateMonitor" ? THEME.primary : "#fff",
-                     color: activeTab === "simulateMonitor" ? THEME.primaryText : THEME.btnText,
-                     border: `1px solid ${THEME.border}`,
-                     borderRadius: "4px",
-                     cursor: "pointer",
-                   }}
-                 >
-                   图片采样监控
-                 </button>
-               </li>
-             </>
-           )}
+            <li>
+              <button
+                onClick={() => setActiveTab("simulateMonitor")}
+                style={{
+                  width: "100%",
+                  marginBottom: "8px",
+                  padding: "8px",
+                  backgroundColor:
+                    activeTab === "simulateMonitor" ? THEME.primary : "#fff",
+                  color: activeTab === "simulateMonitor" ? THEME.primaryText : THEME.btnText,
+                  border: `1px solid ${THEME.border}`,
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                }}
+              >
+                图片采样监控
+              </button>
+            </li>
+          )}
         </ul>
         <div style={{ marginTop: "30px" }}>
           <button
@@ -443,7 +451,6 @@ const Dashboard = () => {
          {activeTab === "myReports" && <MyReports />}
          {activeTab === "adminReports" && <AdminCenter />}
          {activeTab === "adminCredit" && <AdminCreditStats />}
-         {activeTab === "adminSeatConfig" && <AdminSeatConfig />}
          {activeTab === "simulateMonitor" && <AdminSimulateMonitor />}
       </main>
 

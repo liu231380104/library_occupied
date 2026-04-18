@@ -283,6 +283,84 @@ const maybeCreateLeavePromptAndTimeout = async (conn, {
   });
 };
 
+const maybeCreateReturnReminder = async (conn, {
+  seatId,
+  seatNumber,
+  area,
+  userId,
+  reservationId,
+  leaveStartedAtMs,
+}) => {
+  if (!userId || !reservationId) return;
+
+  const [leavePromptRows] = await conn.query(
+    `SELECT prompt_id, prompt_status
+     FROM reservation_leave_prompts
+     WHERE reservation_id = ?
+       AND seat_id = ?
+     ORDER BY created_at DESC
+     LIMIT 5`,
+    [reservationId, seatId],
+  );
+  const latestPrompt = leavePromptRows[0] || null;
+  if (!latestPrompt) return;
+  if (String(latestPrompt.prompt_status || '') === 'released') return;
+
+  const pendingPrompt = leavePromptRows.find((item) => String(item?.prompt_status || '') === 'pending') || null;
+  const relatedPromptIds = leavePromptRows
+    .map((item) => Number(item?.prompt_id))
+    .filter((item) => Number.isInteger(item) && item > 0);
+  const relatedLeaveSourceKeys = relatedPromptIds.map((promptId) => `leave-created-${promptId}`);
+  const sourceKey = `leave-return-${latestPrompt.prompt_id}`;
+
+  await upsertNotificationHistory(conn, {
+    userId,
+    eventType: 'success',
+    title: '已返回座位',
+    message: `系统检测到你在${area}${seatNumber}已返回座位，系统已继续为你保留座位。`,
+    source: 'leave-return',
+    sourceKey,
+    payload: {
+      promptId: latestPrompt?.prompt_id || null,
+      reservationId,
+      seatId,
+      seatNumber,
+      area,
+      leaveStartedAt: Number.isFinite(Number(leaveStartedAtMs))
+        ? new Date(Number(leaveStartedAtMs)).toISOString()
+        : null,
+      returnedAt: new Date().toISOString(),
+    },
+  });
+
+  if (pendingPrompt?.prompt_id) {
+    await conn.query(
+      `UPDATE reservation_leave_prompts
+       SET prompt_status = 'retained', responded_at = NOW()
+       WHERE prompt_id = ?`,
+      [pendingPrompt.prompt_id],
+    );
+    await conn.query(
+      `UPDATE reservation_leave_prompts
+       SET prompt_status = 'expired', responded_at = NOW()
+       WHERE reservation_id = ? AND prompt_status = 'pending' AND prompt_id <> ?`,
+      [reservationId, pendingPrompt.prompt_id],
+    );
+  }
+
+  if (relatedLeaveSourceKeys.length > 0) {
+    await conn.query(
+      `UPDATE notification_history
+       SET is_read = 1, updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = ?
+         AND source = 'leave-presence'
+         AND source_key IN (?)
+         AND is_read = 0`,
+      [userId, relatedLeaveSourceKeys],
+    );
+  }
+};
+
 const loadSeatMeta = () => {
   try {
     if (!fs.existsSync(SEAT_META_PATH)) return null;
@@ -292,6 +370,30 @@ const loadSeatMeta = () => {
   } catch (_e) {
     return null;
   }
+};
+
+const saveSeatMeta = (meta) => {
+  try {
+    fs.writeFileSync(SEAT_META_PATH, JSON.stringify(meta, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('写入 seats_meta.json 失败:', e.message || e);
+  }
+};
+
+const resolveSeatBaselineStatus = async (conn, seatId) => {
+  const [activeRows] = await conn.query(
+    "SELECT 1 FROM reservations WHERE seat_id = ? AND res_status = 'active' LIMIT 1",
+    [seatId],
+  );
+  if (activeRows.length > 0) return 2;
+
+  const [pendingRows] = await conn.query(
+    "SELECT 1 FROM reservations WHERE seat_id = ? AND res_status = 'pending' LIMIT 1",
+    [seatId],
+  );
+  if (pendingRows.length > 0) return 1;
+
+  return 0;
 };
 
 const getLatestReservationStateForSeat = async (conn, seatId) => {
@@ -460,6 +562,22 @@ const applySimulationToDatabase = async (result) => {
     }
 
     const activeTimerSession = activeLeaveTimerSessionsBySeatId.get(seatId);
+    if (hasPerson && isActive && (activeTimerSession || seatSnapshot.itemOccupiedSince)) {
+      await maybeCreateReturnReminder(conn, {
+        seatId,
+        seatNumber,
+        area,
+        userId: reservation?.user_id,
+        reservationId: reservation?.reservation_id,
+        leaveStartedAtMs: activeTimerSession?.startTime || seatSnapshot.itemOccupiedSince,
+      });
+      broadcastSeatUpdate({
+        area,
+        source: 'simulate',
+        reason: 'leave-return-detected',
+        seatId,
+      });
+    }
     if (effectiveWithTimer && Number.isFinite(Number(leaveTimerStartTime))) {
       const nextStartTime = Number(leaveTimerStartTime);
       if (!activeTimerSession || Math.abs(Number(activeTimerSession.startTime) - nextStartTime) > 1000) {
@@ -946,6 +1064,110 @@ router.put('/config', authenticateAdmin, (req, res) => {
     return res.status(500).json({
       success: false,
       error: `写入座位配置失败: ${error.message}`,
+    });
+  }
+});
+
+/**
+ * POST /simulate/sync-seats
+ * 将当前座位配置同步到数据库 seats 表，并更新 seats_meta 映射
+ */
+router.post('/sync-seats', authenticateAdmin, async (req, res) => {
+  const area = String(req.body?.area || 'A区').trim() || 'A区';
+  const prefix = String(req.body?.prefix || 'A').trim() || 'A';
+  const seats = req.body?.seats;
+  const previewImageUrl = typeof req.body?.previewImageUrl === 'string'
+    ? req.body.previewImageUrl.trim()
+    : '';
+
+  const errMsg = validateSeatsArray(seats);
+  if (errMsg) {
+    return res.status(400).json({ success: false, error: errMsg });
+  }
+
+  const normalizedSeats = seats.map((seat) => seat.map((v) => Math.round(Number(v))));
+  if (normalizedSeats.length === 0) {
+    return res.status(400).json({ success: false, error: '请先确认至少一个座位框' });
+  }
+
+  try {
+    const conn = await db;
+    const generatedSeatNumbers = normalizedSeats.map((_, idx) => `${prefix}${idx + 1}`);
+    const seatMappings = [];
+
+    for (let idx = 0; idx < generatedSeatNumbers.length; idx += 1) {
+      const seatNumber = generatedSeatNumbers[idx];
+      const bbox = normalizedSeats[idx];
+      const [existRows] = await conn.query(
+        'SELECT seat_id FROM seats WHERE seat_number = ? LIMIT 1',
+        [seatNumber],
+      );
+
+      if (existRows.length > 0) {
+        const seatId = Number(existRows[0].seat_id);
+        const baselineStatus = await resolveSeatBaselineStatus(conn, seatId);
+        await conn.query(
+          'UPDATE seats SET area = ?, status = ? WHERE seat_number = ?',
+          [area, baselineStatus, seatNumber],
+        );
+        seatMappings.push({ seatId, seatNumber, area, bbox });
+      } else {
+        const [insertResult] = await conn.query(
+          'INSERT INTO seats (seat_number, area, status) VALUES (?, ?, 0)',
+          [seatNumber, area],
+        );
+        const seatId = Number(insertResult?.insertId);
+        if (Number.isInteger(seatId) && seatId > 0) {
+          seatMappings.push({ seatId, seatNumber, area, bbox });
+        }
+      }
+    }
+
+    if (generatedSeatNumbers.length > 0) {
+      const placeholders = generatedSeatNumbers.map(() => '?').join(',');
+      await conn.query(
+        `DELETE FROM seats
+         WHERE area = ?
+           AND seat_number NOT IN (${placeholders})
+           AND seat_id NOT IN (SELECT DISTINCT seat_id FROM reservations)`,
+        [area, ...generatedSeatNumbers],
+      );
+    }
+
+    const currentMeta = loadSeatMeta();
+    saveSeatMeta({
+      ...(currentMeta || {}),
+      area,
+      prefix,
+      seats: normalizedSeats,
+      previewImageUrl: previewImageUrl || currentMeta?.previewImageUrl || '/python-assets/results/annotated_seats.jpg',
+      seatsCount: normalizedSeats.length,
+      seatMappings,
+      savedAt: Date.now(),
+    });
+
+    const payload = `${JSON.stringify(normalizedSeats, null, 2)}\n`;
+    const tmpPath = `${SEATS_JSON_PATH}.tmp`;
+    fs.writeFileSync(tmpPath, payload, 'utf-8');
+    fs.renameSync(tmpPath, SEATS_JSON_PATH);
+
+    broadcastSeatUpdate({
+      area,
+      source: 'simulate',
+      reason: 'simulate-seat-sync',
+      seatIds: seatMappings.map((item) => Number(item.seatId)).filter((id) => Number.isInteger(id) && id > 0),
+    });
+
+    return res.json({
+      success: true,
+      message: `已同步 ${normalizedSeats.length} 个座位到 ${area}`,
+      count: normalizedSeats.length,
+      seatMappings,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: `同步座位配置失败: ${error.message}`,
     });
   }
 });

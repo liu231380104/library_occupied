@@ -142,11 +142,10 @@ npm start
 
 ## 10. 典型使用流程
 
-1. 管理员进入管理中心，填写视频路径
-2. 点击“识别座位”，生成候选座位框
-3. 调整并确认座位框，保存到数据库与 `seats.json`
-4. 运行“占座检测”，生成检测视频并更新占座结果
-5. 用户端查看座位状态、预约、举报
+1. 管理员进入管理中心，维护模拟座位配置
+2. 保存并同步座位配置到数据库与 `seats.json`
+3. 运行占座检测或模拟采样，持续更新占座结果
+4. 用户端查看座位状态、预约、举报
 
 ## 10.1 模型 Web API 封装说明（可用 Postman 测试）
 
@@ -160,7 +159,6 @@ npm start
 当前项目已提供模型接口（后端启动后可直接测试）：
 
 - GET /api/model/health
-- POST /api/model/seat-detect
 - POST /api/model/occupation-detect
 
 统一返回格式：
@@ -174,16 +172,7 @@ Postman 测试示例：
 	 - Method: GET
 	 - URL: http://localhost:5000/api/model/health
 
-2. 座位识别
-	 - Method: POST
-	 - URL: http://localhost:5000/api/model/seat-detect
-	 - Body(JSON):
-		 {
-			 "videoPath": "D:/libary_occupied/v1.mp4",
-			 "frame": 0
-		 }
-
-3. 占座识别
+2. 占座识别
 	 - Method: POST
 	 - URL: http://localhost:5000/api/model/occupation-detect
 	 - Body(JSON):

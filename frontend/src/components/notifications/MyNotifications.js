@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from "react";
 import api from "../../services/api";
 
+const NOTIFICATION_SYNC_INTERVAL_MS = 3000;
+
 const MyNotifications = () => {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [processingPromptId, setProcessingPromptId] = useState(null);
+  const [markingAllRead, setMarkingAllRead] = useState(false);
 
   const fetchNotifications = async () => {
     try {
@@ -36,11 +39,47 @@ const MyNotifications = () => {
   useEffect(() => {
     fetchNotifications();
 
+    let refreshTimer = null;
+    const scheduleRefresh = (delayMs = 0) => {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      refreshTimer = setTimeout(() => {
+        fetchNotifications();
+      }, Math.max(0, Number(delayMs) || 0));
+    };
+
     const timer = setInterval(() => {
       fetchNotifications();
-    }, 30000);
+    }, NOTIFICATION_SYNC_INTERVAL_MS);
 
-    return () => clearInterval(timer);
+    let source;
+    if (typeof EventSource !== "undefined") {
+      source = new EventSource("/api/seats/stream");
+      const handleSeatUpdate = (event) => {
+        try {
+          // 任意座位事件都可能伴随通知变更，做一次短防抖刷新。
+          JSON.parse(event.data || "{}");
+          scheduleRefresh(120);
+        } catch (e) {
+          // ignore malformed events
+        }
+      };
+      source.addEventListener("seat-update", handleSeatUpdate);
+      source.onerror = () => {
+        // keep the polling path as a fallback
+      };
+    }
+
+    return () => {
+      clearInterval(timer);
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      if (source) {
+        source.close();
+      }
+    };
   }, []);
 
   const getCardStyle = (type) => {
@@ -136,13 +175,48 @@ const MyNotifications = () => {
     }
   };
 
+  const handleMarkAllRead = async () => {
+    if (markingAllRead) return;
+    setMarkingAllRead(true);
+
+    const prevNotifications = notifications;
+    setNotifications((prev) => prev.map((item) => ({ ...item, isRead: true })));
+
+    try {
+      await api.patch("/reservations/notifications/read", { markAll: true });
+      await fetchNotifications();
+    } catch (err) {
+      setNotifications(prevNotifications);
+      alert(err.response?.data?.message || "一键已读失败");
+    } finally {
+      setMarkingAllRead(false);
+    }
+  };
+
   if (loading) return <div>加载消息中...</div>;
   if (error) return <div>{error}</div>;
 
   return (
     <div style={{ marginTop: "24px", background: "#fcfbf8", border: "1px solid #d8d2c9", borderRadius: "10px", padding: "14px" }}>
       <h3>消息提醒</h3>
-      <p style={{ color: "#5f6768" }}>系统每30秒自动刷新一次提醒。</p>
+      <p style={{ color: "#5f6768" }}>消息实时推送显示，网络抖动时会自动兜底同步。</p>
+      <div style={{ marginBottom: "12px" }}>
+        <button
+          onClick={handleMarkAllRead}
+          disabled={markingAllRead || notifications.length === 0 || notifications.every((item) => item.isRead)}
+          style={{
+            padding: "6px 12px",
+            backgroundColor: markingAllRead ? "#a7b1b4" : "#7f95a6",
+            color: "#fff",
+            border: "none",
+            borderRadius: "4px",
+            cursor: markingAllRead ? "not-allowed" : "pointer",
+            fontSize: "13px",
+          }}
+        >
+          {markingAllRead ? "处理中..." : "一键已读"}
+        </button>
+      </div>
 
       {notifications.length === 0 ? (
         <p>暂无消息提醒</p>
