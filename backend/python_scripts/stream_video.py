@@ -13,6 +13,60 @@ DEFAULT_PERSON_MODEL = os.environ.get("PERSON_DETECT_MODEL", os.path.join(MODEL_
 DEFAULT_ITEM_MODEL = os.environ.get("ITEM_DETECT_MODEL", os.path.join(MODEL_DIR, "yolov8n.pt"))
 BOOK_CLASS_ID = 73
 BOOK_ITEM_MIN_CONF = max(0.0, min(1.0, float(os.environ.get("BOOK_ITEM_MIN_CONF", "0.3"))))
+BOOK_ITEM_MIN_OVERLAP = max(0.0, min(1.0, float(os.environ.get("BOOK_ITEM_MIN_OVERLAP", "0.02"))))
+
+
+def intersection_area(a, b):
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    return float(ix2 - ix1) * float(iy2 - iy1)
+
+
+def box_area(box):
+    x1, y1, x2, y2 = box
+    return max(0.0, float(x2) - float(x1)) * max(0.0, float(y2) - float(y1))
+
+
+def overlap_ratio(obj_box, seat_box):
+    obj_area = box_area(obj_box)
+    if obj_area <= 0:
+        return 0.0
+    return intersection_area(obj_box, seat_box) / obj_area
+
+
+def is_item_in_seat(item, seat):
+    item_box = [item[0], item[1], item[2], item[3]]
+    cls_id = int(item[4]) if len(item) > 4 else -1
+    by_bottom = bottom_in_box(item_box, seat)
+
+    # 仅对书本启用重叠面积兜底，减少平放书本底部点偏移导致的漏判。
+    if cls_id == BOOK_CLASS_ID:
+        return by_bottom or overlap_ratio(item_box, seat) >= BOOK_ITEM_MIN_OVERLAP
+
+    return by_bottom
+
+
+def resolve_class_name(names, cls_id):
+    if isinstance(names, dict):
+        return str(names.get(cls_id, cls_id))
+    if isinstance(names, list) and 0 <= cls_id < len(names):
+        return str(names[cls_id])
+    return str(cls_id)
+
+
+def draw_detection_box(frame, box, color, label, thickness=2, text_scale=0.55):
+    x1, y1, x2, y2 = map(int, box)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+    (_, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, text_scale, 2)
+    text_y = max(th + 6, y1 - 6)
+    cv2.putText(frame, label, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, text_scale, (0, 0, 0), 4)
+    cv2.putText(frame, label, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, text_scale, color, 2)
 
 
 def detect_seat_states(frame, seats, person_model, item_model, target_item_ids, imgsz, conf):
@@ -27,6 +81,7 @@ def detect_seat_states(frame, seats, person_model, item_model, target_item_ids, 
     yolo_persons = []
     items = []
     PERSON_ID = 0
+    item_names = getattr(i_res, 'names', None) or getattr(item_model, 'names', None) or {}
 
     for box in i_res.boxes:
         cls_id = int(box.cls[0])
@@ -37,7 +92,7 @@ def detect_seat_states(frame, seats, person_model, item_model, target_item_ids, 
         elif cls_id in target_item_ids:
             if cls_id == BOOK_CLASS_ID and confv < BOOK_ITEM_MIN_CONF:
                 continue
-            items.append([x1, y1, x2, y2, cls_id, confv])
+            items.append([x1, y1, x2, y2, cls_id, confv, resolve_class_name(item_names, cls_id)])
 
     persons = merge_person_detections(best_persons, yolo_persons, iou_threshold=0.2)
 
@@ -45,7 +100,7 @@ def detect_seat_states(frame, seats, person_model, item_model, target_item_ids, 
     seat_states = []
     for i, seat in enumerate(seats):
         has_person = any(bottom_in_box([p[0], p[1], p[2], p[3]], seat) for p in persons)
-        has_item = any(bottom_in_box([it[0], it[1], it[2], it[3]], seat) for it in items)
+        has_item = any(is_item_in_seat(it, seat) for it in items)
         is_occupied = has_person or has_item
         seat_states.append({
             "index": i,
@@ -58,6 +113,8 @@ def detect_seat_states(frame, seats, person_model, item_model, target_item_ids, 
     return {
         "occupiedIndices": occupied,
         "seatStates": seat_states,
+        "personBoxes": best_persons + yolo_persons,
+        "itemBoxes": items,
     }
 
 
@@ -197,6 +254,8 @@ def main():
     occupied_seats = []
     seat_states = []
     current_occupied = set()
+    latest_person_boxes = []
+    latest_item_boxes = []
     frame = first_frame
     while frame is not None:
 
@@ -215,6 +274,8 @@ def main():
                         args.imgsz,
                         args.conf,
                     )
+                latest_person_boxes = detection_result.get("personBoxes", []) or []
+                latest_item_boxes = detection_result.get("itemBoxes", []) or []
                 for state in detection_result["seatStates"]:
                     seat_index = int(state.get("index", -1))
                     if seat_index < 0 or seat_index >= len(seats):
@@ -247,6 +308,8 @@ def main():
                     args.imgsz,
                     args.conf,
                 )
+                latest_person_boxes = detection_result.get("personBoxes", []) or []
+                latest_item_boxes = detection_result.get("itemBoxes", []) or []
                 for state in detection_result["seatStates"]:
                     seat_index = int(state.get("index", -1))
                     if seat_index < 0 or seat_index >= len(seats):
@@ -268,6 +331,34 @@ def main():
                 current_occupied = {idx for idx, flag in enumerate(stable_occupied) if flag}
 
         # 始终绘制高对比座位框，便于在压缩后视频中观察
+        for p in latest_person_boxes:
+            if len(p) >= 5:
+                draw_detection_box(
+                    frame,
+                    p[:4],
+                    (0, 220, 0),
+                    f"Person {float(p[4]):.2f}",
+                    thickness=2,
+                    text_scale=0.5,
+                )
+
+        for it in latest_item_boxes:
+            if len(it) >= 7:
+                cls_id = int(it[4])
+                confv = float(it[5])
+                cls_name = str(it[6])
+                color = (0, 215, 255)
+                if cls_id == BOOK_CLASS_ID:
+                    color = (255, 180, 0)
+                draw_detection_box(
+                    frame,
+                    it[:4],
+                    color,
+                    f"{cls_name} {confv:.2f}",
+                    thickness=2,
+                    text_scale=0.45,
+                )
+
         for i, seat in enumerate(seats):
             x1, y1, x2, y2 = map(int, seat)
             color = (0, 255, 0) if i in current_occupied else (0, 0, 255)

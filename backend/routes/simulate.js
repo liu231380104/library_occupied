@@ -995,15 +995,42 @@ router.get('/status', (req, res) => {
       });
     }
 
-    // 查找最新生成的调试图片
+    // 优先返回与当前状态同帧的调试图片
     let latestDebugImage = null;
+    let latestDebugFrameId = null;
     try {
       ensureDebugDir();
-      const fixedPreviewName = 'simulate_latest.jpg';
-      const fixedPreviewPath = path.join(DEBUG_OUTPUT_DIR, fixedPreviewName);
-      if (fs.existsSync(fixedPreviewPath)) {
-        latestDebugImage = `/python-assets/debug_output/${fixedPreviewName}`;
-      } else {
+      const statusFrameId = Number(simulateData?.status?.frameId);
+      const statusImageName = String(simulateData?.status?.debugImageName || '').trim();
+
+      if (statusImageName) {
+        const statusImagePath = path.join(DEBUG_OUTPUT_DIR, statusImageName);
+        if (fs.existsSync(statusImagePath)) {
+          latestDebugImage = `/python-assets/debug_output/${statusImageName}`;
+          if (Number.isFinite(statusFrameId) && statusFrameId >= 0) {
+            latestDebugFrameId = Math.floor(statusFrameId);
+          }
+        }
+      }
+
+      if (!latestDebugImage && Number.isFinite(statusFrameId) && statusFrameId >= 0) {
+        const frameName = `simulate_frame_${String(Math.floor(statusFrameId)).padStart(6, '0')}.jpg`;
+        const framePath = path.join(DEBUG_OUTPUT_DIR, frameName);
+        if (fs.existsSync(framePath)) {
+          latestDebugImage = `/python-assets/debug_output/${frameName}`;
+          latestDebugFrameId = Math.floor(statusFrameId);
+        }
+      }
+
+      if (!latestDebugImage) {
+        const fixedPreviewName = 'simulate_latest.jpg';
+        const fixedPreviewPath = path.join(DEBUG_OUTPUT_DIR, fixedPreviewName);
+        if (fs.existsSync(fixedPreviewPath)) {
+          latestDebugImage = `/python-assets/debug_output/${fixedPreviewName}`;
+        }
+      }
+
+      if (!latestDebugImage) {
         const files = fs.readdirSync(DEBUG_OUTPUT_DIR)
           .filter(f => /\.(jpg|jpeg|png)$/i.test(f))
           .sort()
@@ -1022,6 +1049,7 @@ router.get('/status', (req, res) => {
       timestamp: Date.now(),
       uptime: simulateStartTime ? Date.now() - simulateStartTime : 0,
       debugImageUrl: latestDebugImage,
+      debugImageFrameId: latestDebugFrameId,
       seatConfigPath: SEATS_JSON_PATH,
     };
 
