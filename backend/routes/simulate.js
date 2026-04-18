@@ -666,6 +666,24 @@ const ensureDebugDir = () => {
   }
 };
 
+const clearDebugPreviewFiles = () => {
+  try {
+    ensureDebugDir();
+    const files = fs.readdirSync(DEBUG_OUTPUT_DIR)
+      .filter((file) => /\.(jpg|jpeg|png)$/i.test(file));
+    for (const file of files) {
+      const target = path.join(DEBUG_OUTPUT_DIR, file);
+      try {
+        fs.unlinkSync(target);
+      } catch (_e) {
+        // 文件可能正被写入，失败时忽略，后续帧会覆盖最新预览。
+      }
+    }
+  } catch (err) {
+    console.warn('[SIMULATE] 清理 debug 预览失败:', err.message || err);
+  }
+};
+
 /**
  * POST /simulate/start
  * 启动模拟采样进程
@@ -681,6 +699,7 @@ router.post('/start', (req, res) => {
     }
 
     ensureDebugDir();
+    clearDebugPreviewFiles();
 
     if (!fs.existsSync(LIBRARY_SAMPLED_DATA)) {
       return res.status(400).json({

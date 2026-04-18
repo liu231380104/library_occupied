@@ -667,8 +667,13 @@ const AdminSimulateMonitor = () => {
       setErrorMsg("");
       const resp = await api.post("/simulate/start");
       if (resp.data?.success) {
+        latestSyncedSeqRef.current = -1;
+        previewSyncTokenRef.current += 1;
+        setLivePreviewUrl("");
+        setSimulateData(null);
         setIsRunning(true);
         setStatusHistory(["[启动] 模拟采样已启动"]);
+        fetchSimulateStatus();
         // 启动轮询
         startPolling();
       } else {
@@ -736,6 +741,12 @@ const AdminSimulateMonitor = () => {
     const frameId = hasFrameId ? Math.floor(frameIdRaw) : -1;
 
     setIsRunning(Boolean(statusData?.isRunning));
+
+    if (hasSyncSeq && syncSeq < latestSyncedSeqRef.current) {
+      // 新一轮模拟重启后 processedFrames 会从小值重新计数。
+      // 重置同步基线，避免把新帧误判为旧帧而导致画面卡住。
+      latestSyncedSeqRef.current = -1;
+    }
 
     const rawDebugUrl = statusData?.debugImageUrl;
     if (!rawDebugUrl) {
