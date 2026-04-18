@@ -17,6 +17,11 @@ LEAVE_ITEM_TIMEOUT_MINUTES = float(os.environ.get('LEAVE_ITEM_TIMEOUT_MINUTES', 
 DEFAULT_PERSON_MODEL = os.environ.get("PERSON_DETECT_MODEL", os.path.join(MODEL_DIR, "best.pt"))
 DEFAULT_ITEM_MODEL = os.environ.get("ITEM_DETECT_MODEL", os.path.join(MODEL_DIR, "yolov8n.pt"))
 
+# 书本专用模型（默认 backend/modules/book_best.pt，可通过环境变量覆盖）
+DEFAULT_BOOK_MODEL = os.environ.get("BOOK_DETECT_MODEL", os.path.join(MODEL_DIR, "book_best.pt"))
+# 你的 book_best.pt 只有一个 book 标签时，类别通常为 0。
+DEFAULT_BOOK_CLASS_ID = int(os.environ.get("BOOK_CLASS_ID", "0"))
+
 
 class ImageSimulator:
     """基于图片文件夹的座位监控模拟器
@@ -26,6 +31,8 @@ class ImageSimulator:
     """
 
     def __init__(self, image_dir, seats, person_model, item_model, target_item_ids,
+                 book_model=None, book_class_id=DEFAULT_BOOK_CLASS_ID,
+                 debug_book_detections=False,
                  imgsz=1280, conf=0.4, occupy_thr=3, detect_interval=1,
                  debug_output_dir="", debug_output_interval=10.0):
         """初始化图片模拟器
@@ -46,6 +53,9 @@ class ImageSimulator:
         self.person_model = person_model
         self.item_model = item_model
         self.target_item_ids = target_item_ids
+        self.book_model = book_model
+        self.book_class_id = int(book_class_id)
+        self.debug_book_detections = bool(debug_book_detections)
         self.imgsz = imgsz
         self.conf = conf
         self.occupy_thr = max(1, occupy_thr)
@@ -83,6 +93,22 @@ class ImageSimulator:
         self.current_frame_id = -1
         self.current_image_path = ""
         self.latest_debug_image_name = "simulate_latest.jpg"
+
+    def _draw_item_boxes(self, canvas, item_boxes, color=(255, 0, 255), prefix="BOOK"):
+        """在画面上绘制 itemBoxes（来自 stream_video.detect_seat_states）"""
+        if canvas is None or not isinstance(item_boxes, list):
+            return
+        for it in item_boxes:
+            try:
+                x1, y1, x2, y2 = map(int, it[0:4])
+                cls_id = int(it[4]) if len(it) > 4 else -1
+                confv = float(it[5]) if len(it) > 5 else -1.0
+                name = str(it[6]) if len(it) > 6 else str(cls_id)
+            except Exception:
+                continue
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
+            label = f"{prefix}:{name}#{cls_id} {confv:.2f}" if confv >= 0 else f"{prefix}:{name}#{cls_id}"
+            cv2.putText(canvas, label, (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
     def _write_debug_preview_if_needed(self, frame, frame_id=-1):
         if not self.debug_output_dir:
@@ -184,7 +210,7 @@ class ImageSimulator:
         Returns:
             dict: 包含 occupiedIndices, seatStates, violation_times 等信息
         """
-        # 运行检测
+        # 运行通用物品检测（保持原有模型与类别ID列表）
         detection_result = detect_seat_states(
             frame,
             self.seats,
@@ -195,18 +221,59 @@ class ImageSimulator:
             self.conf,
         )
 
+        # 额外运行书本专用模型检测，并将结果与通用物品检测合并。
+        # book_best.pt 为单类模型时：book_class_id=0 即可。
+        detection_book = None
+        if self.book_model is not None:
+            try:
+                detection_book = detect_seat_states(
+                    frame,
+                    self.seats,
+                    self.person_model,
+                    self.book_model,
+                    [self.book_class_id],
+                    self.imgsz,
+                    self.conf,
+                    item_person_class_id=None,
+                )
+            except Exception:
+                detection_book = None
+
+        # 若开启调试：将书本模型检测到的框画在实时预览图上（紫色）
+        if self.debug_output_dir and self.debug_book_detections and detection_book is not None:
+            try:
+                canvas = frame.copy()
+                self._draw_item_boxes(canvas, detection_book.get("itemBoxes", []) or [], color=(255, 0, 255), prefix="BOOK")
+                # 复用现有预览写入逻辑：将画框后的 canvas 临时作为 frame 写入
+                self._write_debug_preview_if_needed(canvas, self.current_frame_id)
+            except Exception:
+                # 画框失败不影响主流程
+                pass
+
         self.total_detections += 1
         current_time = self.get_current_real_time()
 
-        # 更新每个座位的状态
-        for state in detection_result["seatStates"]:
+        # 更新每个座位的状态（合并 hasItem：通用物品 OR 书本专用模型）
+        seat_states_main = detection_result.get("seatStates", []) or []
+        seat_states_book = (detection_book or {}).get("seatStates", []) or []
+        book_by_index = {int(s.get("index", -1)): s for s in seat_states_book if isinstance(s, dict)}
+
+        for state in seat_states_main:
             seat_index = int(state.get("index", -1))
             if seat_index < 0 or seat_index >= len(self.seats):
                 continue
 
             is_occupied_now = bool(state.get("occupied"))
             has_person = bool(state.get("hasPerson"))
-            has_item = bool(state.get("hasItem"))
+            has_item_main = bool(state.get("hasItem"))
+            has_item_book = bool(book_by_index.get(seat_index, {}).get("hasItem"))
+            has_item = bool(has_item_main or has_item_book)
+
+            # 用合并后的 hasItem/occupied 覆盖写回，保证后续稳定状态与计时逻辑一致
+            state = dict(state)
+            state["hasItem"] = has_item
+            state["occupied"] = bool(has_person or has_item)
+            is_occupied_now = bool(state.get("occupied"))
 
             self.latest_state_by_index[seat_index] = state
 
@@ -245,7 +312,10 @@ class ImageSimulator:
                 self.violation_start_time[seat_index] = None
 
         self.current_occupied = {idx for idx, flag in enumerate(self.stable_occupied) if flag}
-        self._write_debug_preview_if_needed(frame, self.current_frame_id)
+        # 如果上面对 canvas 已输出过（debug_book_detections），这里仍然输出一次原逻辑也没问题；
+        # 为避免双写，在 debug_book_detections 开启时这里跳过。
+        if not (self.debug_output_dir and self.debug_book_detections and detection_book is not None):
+            self._write_debug_preview_if_needed(frame, self.current_frame_id)
 
         return self._build_result()
 
@@ -350,6 +420,12 @@ def main():
                        help='采样间隔（秒）')
     parser.add_argument('--imgsz', type=int, default=1280,
                        help='YOLO检测输入尺寸')
+    parser.add_argument('--book-model', default=DEFAULT_BOOK_MODEL,
+                       help='书本专用检测模型路径（默认 backend/modules/book_best.pt；设为空则禁用）')
+    parser.add_argument('--book-class-id', type=int, default=DEFAULT_BOOK_CLASS_ID,
+                       help='书本类别ID（单类book模型通常为0；如自训模型类别不同请修改）')
+    parser.add_argument('--include-book-in-item-model', action='store_true',
+                       help='通用物品模型也识别书本（默认关闭：书本仅由book_best.pt负责）')
     parser.add_argument('--output-json', default='',
                        help='输出结果JSON文件路径（空则只输出到标准输出）')
     parser.add_argument('--continuous-output', action='store_true',
@@ -361,6 +437,8 @@ def main():
                        help='实时预览图输出目录')
     parser.add_argument('--debug-output-interval', type=float, default=0.0,
                        help='实时预览图输出间隔（秒）')
+    parser.add_argument('--debug-book-detections', action='store_true',
+                       help='在 debug_output 预览图上叠加绘制 book_best.pt 的检测框（紫色）')
 
     args = parser.parse_args()
 
@@ -381,12 +459,18 @@ def main():
     try:
         person_model = YOLO(DEFAULT_PERSON_MODEL)
         item_model = YOLO(DEFAULT_ITEM_MODEL)
+        book_model = None
+        if (args.book_model or "").strip():
+            book_model = YOLO((args.book_model or "").strip())
     except Exception as e:
         print(json.dumps({"error": f"加载模型失败: {e}"}))
         return
 
-    # 定义目标物品类别ID（COCO）
-    TARGET_ITEM_IDS = [24, 25, 26, 63, 67, 73]  # 背包, 雨伞, 手提包, 笔记本电脑, 手机, 书
+    # 定义通用物品模型要识别的目标类别（COCO）
+    # 默认移除“书本(73)”，避免与 book_best.pt 重复/冲突；如需恢复可加 --include-book-in-item-model
+    TARGET_ITEM_IDS = [24, 25, 26, 63, 67]  # 背包, 雨伞, 手提包, 笔记本电脑, 手机
+    if args.include_book_in_item_model:
+        TARGET_ITEM_IDS.append(73)
 
     # 创建模拟器
     try:
@@ -396,6 +480,9 @@ def main():
             person_model=person_model,
             item_model=item_model,
             target_item_ids=TARGET_ITEM_IDS,
+            book_model=book_model,
+            book_class_id=args.book_class_id,
+            debug_book_detections=args.debug_book_detections,
             imgsz=args.imgsz,
             conf=args.conf,
             occupy_thr=args.occupy_thr,

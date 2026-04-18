@@ -69,7 +69,16 @@ def draw_detection_box(frame, box, color, label, thickness=2, text_scale=0.55):
     cv2.putText(frame, label, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, text_scale, color, 2)
 
 
-def detect_seat_states(frame, seats, person_model, item_model, target_item_ids, imgsz, conf):
+def detect_seat_states(
+    frame,
+    seats,
+    person_model,
+    item_model,
+    target_item_ids,
+    imgsz,
+    conf,
+    item_person_class_id=0,
+):
     p_res = person_model(frame, conf=conf, verbose=False)[0]
     best_persons = []
     for box in p_res.boxes:
@@ -80,14 +89,14 @@ def detect_seat_states(frame, seats, person_model, item_model, target_item_ids, 
     i_res = item_model(frame, conf=conf, imgsz=imgsz, verbose=False)[0]
     yolo_persons = []
     items = []
-    PERSON_ID = 0
+    PERSON_ID = item_person_class_id
     item_names = getattr(i_res, 'names', None) or getattr(item_model, 'names', None) or {}
 
     for box in i_res.boxes:
         cls_id = int(box.cls[0])
         x1, y1, x2, y2 = box.xyxy[0].tolist()
         confv = float(box.conf[0]) if hasattr(box, 'conf') else 1.0
-        if cls_id == PERSON_ID:
+        if PERSON_ID is not None and cls_id == int(PERSON_ID):
             yolo_persons.append([x1, y1, x2, y2, confv])
         elif cls_id in target_item_ids:
             if cls_id == BOOK_CLASS_ID and confv < BOOK_ITEM_MIN_CONF:
