@@ -12,14 +12,17 @@ const MyNotifications = () => {
       const response = await api.get("/reservations/notifications");
       const incoming = response.data || [];
       setNotifications((prev) => {
-        const merged = [...incoming, ...prev];
-        const uniqueMap = new Map();
-        merged.forEach((item) => {
-          if (!uniqueMap.has(item.id)) {
-            uniqueMap.set(item.id, item);
-          }
+
+        const byId = new Map();
+        prev.forEach((item) => {
+          if (item?.id != null) byId.set(item.id, item);
         });
-        return Array.from(uniqueMap.values()).sort(
+        // 覆盖最新的服务器有效载荷（以服务器为准）
+        incoming.forEach((item) => {
+          if (item?.id != null) byId.set(item.id, item);
+        });
+
+        return Array.from(byId.values()).sort(
           (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
         );
       });
@@ -66,6 +69,17 @@ const MyNotifications = () => {
     const kind = action?.kind || "presence";
     if (!promptId) return;
     setProcessingPromptId(promptId);
+
+    // 仅在用户实际点击后乐观地将此通知标记为已读。
+    // 这可以避免在用户采取行动之前显示“灰色”。
+    if (Number.isInteger(Number(action?.notificationId))) {
+      const nid = Number(action.notificationId);
+      setNotifications((prev) =>
+        prev.map((n) =>
+          Number(n?.notificationId) === nid ? { ...n, isRead: true } : n,
+        ),
+      );
+    }
     try {
       const endpoint =
         kind === "leave"
@@ -97,11 +111,27 @@ const MyNotifications = () => {
     if (!Number.isInteger(notificationId) || notificationId <= 0) return;
 
     try {
+      // Optimistic UI: user clicked "mark read" => grey immediately.
+      setNotifications((prev) =>
+        prev.map((n) =>
+          Number(n?.notificationId) === notificationId
+            ? { ...n, isRead: true }
+            : n,
+        ),
+      );
       await api.patch("/reservations/notifications/read", {
         notificationIds: [notificationId],
       });
       await fetchNotifications();
     } catch (err) {
+      // If server call fails, revert optimistic state.
+      setNotifications((prev) =>
+        prev.map((n) =>
+          Number(n?.notificationId) === notificationId
+            ? { ...n, isRead: false }
+            : n,
+        ),
+      );
       alert(err.response?.data?.message || "标记已读失败");
     }
   };

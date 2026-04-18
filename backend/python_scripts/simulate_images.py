@@ -416,7 +416,7 @@ def main():
                        help='判定为占座所需连续采样次数')
     parser.add_argument('--max-iterations', type=int, default=None,
                        help='最大迭代次数（默认无限）')
-    parser.add_argument('--sample-interval', type=float, default=1.0,
+    parser.add_argument('--sample-interval', type=float, default=3.0,
                        help='采样间隔（秒）')
     parser.add_argument('--imgsz', type=int, default=1280,
                        help='YOLO检测输入尺寸')

@@ -13,6 +13,33 @@
   --danger: #b78a84;
 }
 
+  /* --- Responsive baseline (mobile-friendly defaults) --- */
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  img,
+  video,
+  canvas,
+  svg {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Prevent long content inside flex/grid items from forcing horizontal scroll */
+  * {
+    min-width: 0;
+  }
+
 body {
   margin: 0;
   font-family:
@@ -49,9 +76,23 @@ textarea {
   padding: 8px;
   background: #fff;
   color: var(--text-strong);
+  max-width: 100%;
 }
 
 table {
   background: var(--panel);
+}
+
+/* Make tables scroll on small screens instead of breaking layout */
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 480px) {
+  body {
+    font-size: 14px;
+  }
 }
 

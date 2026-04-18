@@ -1307,7 +1307,7 @@ const AdminSimulateMonitor = () => {
               </div>
             )}
             <div style={{ marginTop: "8px", fontSize: "12px", color: THEME.muted }}>
-              💡 每10秒自动刷新一次画面
+              💡 每3秒自动刷新一次画面
             </div>
           </div>
         </div>
