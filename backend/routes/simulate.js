@@ -838,7 +838,7 @@ router.post('/start', (req, res) => {
       'simulate_images.py',
       '--image-dir', LIBRARY_SAMPLED_DATA,
       '--seats', SEATS_JSON_PATH,
-      '--sample-interval', '1.0',
+      '--sample-interval', '3.0',
       '--imgsz', '1280',
       '--conf', '0.4',
       '--occupy-thr', '3',

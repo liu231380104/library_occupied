@@ -13,7 +13,7 @@ DEFAULT_PERSON_MODEL = os.environ.get("PERSON_DETECT_MODEL", os.path.join(MODEL_
 DEFAULT_ITEM_MODEL = os.environ.get("ITEM_DETECT_MODEL", os.path.join(MODEL_DIR, "yolov8n.pt"))
 BOOK_CLASS_ID = 73
 BOOK_ITEM_MIN_CONF = max(0.0, min(1.0, float(os.environ.get("BOOK_ITEM_MIN_CONF", "0.3"))))
-BOOK_ITEM_MIN_OVERLAP = max(0.0, min(1.0, float(os.environ.get("BOOK_ITEM_MIN_OVERLAP", "0.02"))))
+BOOK_ITEM_MIN_OVERLAP = max(0.0, min(1.0, float(os.environ.get("BOOK_ITEM_MIN_OVERLAP", "0.06"))))
 
 
 def intersection_area(a, b):

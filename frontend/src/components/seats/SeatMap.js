@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import api from "../../services/api";
+import api, { API_BASE_URL, API_ORIGIN } from "../../services/api";
 import { getUserRole } from "../../utils/tokenUtils";
 
 const THEME = {
@@ -178,7 +178,7 @@ const SeatMap = () => {
   useEffect(() => {
     if (!selectedArea || typeof EventSource === "undefined") return undefined;
 
-    const streamUrl = `http://localhost:5000/api/seats/stream?area=${encodeURIComponent(selectedArea)}&_=${Date.now()}`;
+    const streamUrl = `${API_BASE_URL}/seats/stream?area=${encodeURIComponent(selectedArea)}&_=${Date.now()}`;
     const source = new EventSource(streamUrl);
 
     const handleSeatUpdate = () => {
@@ -292,7 +292,7 @@ const SeatMap = () => {
 
     if (/^https?:\/\//i.test(rawUrl)) return withCache(rawUrl);
     const normalized = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
-    return withCache(`http://localhost:5000${normalized}`);
+    return withCache(`${API_ORIGIN}${normalized}`);
   };
 
   const seatWithPreview = seats.find((seat) => seat?.seat_preview_url);

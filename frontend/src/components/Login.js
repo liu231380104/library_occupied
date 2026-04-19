@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import axios from "axios";
+import api from "../services/api";
 import { useNavigate } from "react-router-dom";
 
 const Login = () => {
@@ -17,10 +17,7 @@ const Login = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const response = await axios.post(
-        "http://localhost:5000/api/auth/login",
-        formData,
-      );
+      const response = await api.post("/auth/login", formData);
       setMessage(response.data.message);
       sessionStorage.setItem("token", response.data.token);
       sessionStorage.setItem("creditScore", String(response.data.credit_score ?? ""));

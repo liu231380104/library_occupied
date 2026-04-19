@@ -1,8 +1,16 @@
 import axios from "axios";
 
+// 统一 API 地址配置：优先使用环境变量，其次使用部署服务器默认地址
+// CRA 环境变量需要以 REACT_APP_ 开头，例如：REACT_APP_API_ORIGIN=http://116.62.53.122:5000
+export const API_ORIGIN = (process.env.REACT_APP_API_ORIGIN || "http://116.62.53.122:5000")
+  .trim()
+  .replace(/\/+$/, "");
+
+export const API_BASE_URL = `${API_ORIGIN}/api`;
+
 // 创建 axios 实例
 const api = axios.create({
-  baseURL: "http://localhost:5000/api",
+  baseURL: API_BASE_URL,
   timeout: 10000,
 });
 

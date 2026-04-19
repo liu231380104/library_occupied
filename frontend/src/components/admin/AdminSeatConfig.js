@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import api from "../../services/api";
+import api, { API_ORIGIN } from "../../services/api";
 
 const THEME = {
   panel: "#fcfbf8",
@@ -793,7 +793,7 @@ const AdminSeatConfig = () => {
               >
                 <img
                   ref={imgRef}
-                  src={`http://localhost:5000${previewImageUrl}?t=${Date.now()}`}
+                  src={`${API_ORIGIN}${previewImageUrl}?t=${Date.now()}`}
                   alt="seats-preview"
                   onLoad={refreshImageMetrics}
                   style={{ width: "100%", border: `1px solid ${THEME.border}`, borderRadius: "6px", display: "block" }}
@@ -1078,7 +1078,7 @@ const AdminSeatConfig = () => {
                   onError={() => {
                     setMonitorVideoError("视频加载失败：资源可能尚未生成完成或路径不可访问，请点击“刷新最近检测结果”后重试。");
                   }}
-                  src={/^https?:\/\//i.test(monitorVideoUrl) ? monitorVideoUrl : `http://localhost:5000${monitorVideoUrl}`} 
+                  src={/^https?:\/\//i.test(monitorVideoUrl) ? monitorVideoUrl : `${API_ORIGIN}${monitorVideoUrl}`} 
                 />
                 {monitorVideoError && (
                   <div style={{ marginTop: "8px", color: THEME.danger, fontSize: "13px" }}>

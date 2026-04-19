@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import axios from "axios";
+import api from "../../services/api";
 import { useNavigate } from "react-router-dom";
 
 const AdminLogin = () => {
@@ -19,10 +19,7 @@ const AdminLogin = () => {
     // 每次管理员登录前先清掉旧会话，避免沿用之前的 user token
     sessionStorage.removeItem("token");
     try {
-      const response = await axios.post(
-        "http://localhost:5000/api/auth/login",
-        formData,
-      );
+      const response = await api.post("/auth/login", formData);
       if (response.data.role !== "admin") {
         sessionStorage.removeItem("token");
         setMessage(`登录账号不是管理员（当前角色：${response.data.role || "unknown"}）`);

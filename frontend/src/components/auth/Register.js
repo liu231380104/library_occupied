@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import axios from "axios";
+import api from "../../services/api";
 import { useNavigate } from "react-router-dom";
 
 const Register = () => {
@@ -17,10 +17,7 @@ const Register = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const response = await axios.post(
-        "http://localhost:5000/api/auth/register",
-        formData,
-      );
+      const response = await api.post("/auth/register", formData);
       setMessage(response.data.message);
       if (response.status === 201) {
         navigate("/login");
