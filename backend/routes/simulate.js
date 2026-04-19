@@ -33,7 +33,8 @@ const UPLOAD_ROOT = path.join(BACKEND_DIR, 'uploads');
 const UPLOAD_SIMULATE_DIR = path.join(UPLOAD_ROOT, 'simulate_samples');
 
 const resolvePythonExecutable = () => {
-  const configured = String(process.env.PYTHON_PATH || process.env.PYTHON || 'python').trim();
+  const defaultBin = process.platform === 'win32' ? 'python' : 'python3';
+  const configured = String(process.env.PYTHON_PATH || process.env.PYTHON || defaultBin).trim();
   if (!configured) return 'python';
 
   // pythonw.exe does not provide reliable stdio for our JSON/log stream.

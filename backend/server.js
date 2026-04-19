@@ -71,7 +71,10 @@ const PERSON_DETECT_MODEL = process.env.PERSON_DETECT_MODEL || path.join(MODEL_D
 const ITEM_DETECT_MODEL = process.env.ITEM_DETECT_MODEL || path.join(MODEL_DIR, "yolov8n.pt");
 const SEAT_DETECT_CONF = Number(process.env.SEAT_DETECT_CONF || 0.35);
 const PYTHON_PATH = process.env.PYTHON_PATH || "";
-const PYTHON_EXECUTABLE = PYTHON_PATH || process.env.PYTHON || "python";
+// Python 可执行文件：优先使用环境变量，未配置时按平台给出合理默认值
+// Linux 部署通常为 /usr/bin/python3（`which python3`），Windows 本地开发通常为 python
+const DEFAULT_PYTHON_BIN = process.platform === "win32" ? "python" : "python3";
+const PYTHON_EXECUTABLE = String(PYTHON_PATH || process.env.PYTHON || DEFAULT_PYTHON_BIN).trim() || DEFAULT_PYTHON_BIN;
 const ENABLE_OCCUPATION_CRON = String(process.env.ENABLE_OCCUPATION_CRON || "false").toLowerCase() === "true";
 const OCCUPATION_CRON_EXPR = process.env.OCCUPATION_CRON_EXPR || "*/20 * * * * *";
 const OCCUPATION_CRON_MAX_FRAMES = Number.isFinite(Number(process.env.OCCUPATION_CRON_MAX_FRAMES))
