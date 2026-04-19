@@ -1,11 +1,11 @@
 {
-  "videoPath": "D:\\library_occupied\\v1.mp4",
+  "videoPath": "D:\\cP\\library_occupied\\v1.mp4",
   "frame": 0,
   "area": "A区",
   "prefix": "A",
   "seats": [
     [
-      499,
+      500,
       210,
       650,
       294
@@ -23,10 +23,10 @@
       291
     ],
     [
-      376,
-      223,
-      496,
-      292
+      370,
+      206,
+      497,
+      286
     ],
     [
       817,
@@ -95,13 +95,13 @@
       713
     ],
     [
-      429,
-      533,
-      618,
-      716
+      426,
+      529,
+      615,
+      712
     ]
   ],
-  "previewImageUrl": "http://localhost:5000/uploads/simulate_samples/1776068313372-80004.jpg",
+  "previewImageUrl": "http://localhost:5000/uploads/simulate_samples/1776236325449-8501.jpg",
   "sourceVideo": null,
   "seatsCount": 16,
   "seatMappings": [
@@ -110,7 +110,7 @@
       "seatNumber": "A1",
       "area": "A区",
       "bbox": [
-        499,
+        500,
         210,
         650,
         294
@@ -143,14 +143,14 @@
       "seatNumber": "A4",
       "area": "A区",
       "bbox": [
-        376,
-        223,
-        496,
-        292
+        370,
+        206,
+        497,
+        286
       ]
     },
     {
-      "seatId": 5,
+      "seatId": 33,
       "seatNumber": "A5",
       "area": "A区",
       "bbox": [
@@ -161,7 +161,7 @@
       ]
     },
     {
-      "seatId": 6,
+      "seatId": 34,
       "seatNumber": "A6",
       "area": "A区",
       "bbox": [
@@ -172,7 +172,7 @@
       ]
     },
     {
-      "seatId": 7,
+      "seatId": 35,
       "seatNumber": "A7",
       "area": "A区",
       "bbox": [
@@ -183,7 +183,7 @@
       ]
     },
     {
-      "seatId": 8,
+      "seatId": 36,
       "seatNumber": "A8",
       "area": "A区",
       "bbox": [
@@ -194,7 +194,7 @@
       ]
     },
     {
-      "seatId": 9,
+      "seatId": 37,
       "seatNumber": "A9",
       "area": "A区",
       "bbox": [
@@ -205,7 +205,7 @@
       ]
     },
     {
-      "seatId": 10,
+      "seatId": 38,
       "seatNumber": "A10",
       "area": "A区",
       "bbox": [
@@ -216,7 +216,7 @@
       ]
     },
     {
-      "seatId": 11,
+      "seatId": 39,
       "seatNumber": "A11",
       "area": "A区",
       "bbox": [
@@ -227,7 +227,7 @@
       ]
     },
     {
-      "seatId": 12,
+      "seatId": 53,
       "seatNumber": "A12",
       "area": "A区",
       "bbox": [
@@ -238,7 +238,7 @@
       ]
     },
     {
-      "seatId": 13,
+      "seatId": 54,
       "seatNumber": "A13",
       "area": "A区",
       "bbox": [
@@ -249,7 +249,7 @@
       ]
     },
     {
-      "seatId": 14,
+      "seatId": 55,
       "seatNumber": "A14",
       "area": "A区",
       "bbox": [
@@ -260,7 +260,7 @@
       ]
     },
     {
-      "seatId": 15,
+      "seatId": 56,
       "seatNumber": "A15",
       "area": "A区",
       "bbox": [
@@ -271,16 +271,16 @@
       ]
     },
     {
-      "seatId": 16,
+      "seatId": 57,
       "seatNumber": "A16",
       "area": "A区",
       "bbox": [
-        429,
-        533,
-        618,
-        716
+        426,
+        529,
+        615,
+        712
       ]
     }
   ],
-  "savedAt": 1776068319909
+  "savedAt": 1776236360885
 }
